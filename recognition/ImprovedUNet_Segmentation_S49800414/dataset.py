@@ -1,16 +1,18 @@
-"""
-OASIS brain MRI data loading for 2D tissue segmentation.
-
-The dataset ships already split by patient into train / validate / test folders
-of 256x256 8-bit PNG slices, with a matching mask folder per split. Masks store
-the four tissue classes as the grey levels 0, 85, 170 and 255.
-
-Images are scaled to [0, 1]. Masks are returned as class indices (H, W), which
-is what cross-entropy expects; one_hot() gives the (C, H, W) encoding for Dice.
-
-Self-check (run on a compute node):
-    python dataset.py
-"""
+# OASIS brain MRI data loading for 2D tissue segmentation.
+#
+# The dataset ships already split by patient into train / validate / test folders
+# of 256x256 8-bit PNG slices, with a matching mask folder per split. Masks store
+# the four tissue classes as the grey levels 0, 85, 170 and 255. Layout, shapes
+# and label values were confirmed by data_audit.py before this loader was written.
+#
+# Images are scaled to [0, 1]. Masks are returned as class indices (H, W), which
+# is what cross-entropy expects; one_hot() gives the (C, H, W) encoding for Dice.
+#
+# Based on the data pipeline guidelines in the COMP3710 assignment spec
+# (Section 2.2: patient-level splitting, intensity normalisation, one-hot masks).
+#
+# Self-check (run on a compute node):
+#     python dataset.py
 
 import itertools
 import os
@@ -100,8 +102,10 @@ class OASISDataset(Dataset):
         image_path, mask_path = self.pairs[index]
         image, mask = load_image(image_path), load_mask(mask_path)
         # Flip image and mask together; left-right is the safe axis because
-        # axial brain slices are roughly symmetric.
-        # Flip is the only augmentation; add small rotations/scaling if validation Dice plateaus below train.
+        # axial brain slices are roughly symmetric. A flip moves pixels without
+        # interpolating, so mask labels stay exact. Flip is the only augmentation
+        # for now; small rotations or scaling can follow if validation Dice
+        # plateaus below training Dice.
         if self.augment and torch.rand(()) < 0.5:
             image, mask = image.flip(-1), mask.flip(-1)
         return image, mask

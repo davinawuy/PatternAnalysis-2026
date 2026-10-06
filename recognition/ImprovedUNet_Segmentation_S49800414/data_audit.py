@@ -1,25 +1,23 @@
-"""
-Data audit for 2D segmentation datasets such as the OASIS brain slices.
-
-Makes no assumptions about the layout and reports what is actually on disk:
-  * folder tree with file counts, extensions and sample filenames
-  * for every leaf folder: image shapes, dtypes, intensity range and, for mask
-    folders, the full set of unique label values
-  * slice and patient counts per folder (patient ID taken from the filename by regex)
-  * image/mask pairing per split (every image has a mask with a matching filename)
-  * the patient overlap check between splits
-
-A folder counts as a mask folder if its name contains 'seg', 'mask' or 'label',
-and its split is the first of train/val/validate/test that appears in its name.
-Check both rules against the printed tree before trusting the counts.
-
-The output informs the loader in dataset.py and the feasibility review.
-PNG/JPEG files are read with Pillow. Nifti files (.nii, .nii.gz) need nibabel,
-following the loading approach in Appendix B of the assignment spec.
-
-Usage:
-    python data_audit.py --root /home/groups/comp3710/OASIS
-"""
+# Data audit for 2D segmentation datasets such as the OASIS brain slices.
+#
+# Makes no assumptions about the layout and reports what is actually on disk:
+#   * folder tree with file counts, extensions and sample filenames
+#   * for every leaf folder: image shapes, dtypes, intensity range and, for mask
+#     folders, the full set of unique label values
+#   * slice and patient counts per folder (patient ID taken from the filename by regex)
+#   * image/mask pairing per split (every image has a mask with a matching filename)
+#   * the patient overlap check between splits
+#
+# A folder counts as a mask folder if its name contains 'seg', 'mask' or 'label',
+# and its split is the first of train/val/validate/test that appears in its name.
+# Check both rules against the printed tree before trusting the counts.
+#
+# The output informs the loader in dataset.py and the feasibility review.
+# PNG/JPEG files are read with Pillow. Nifti files (.nii, .nii.gz) need nibabel,
+# following the loading approach in Appendix B of the COMP3710 assignment spec.
+#
+# Usage:
+#     python data_audit.py --root /home/groups/comp3710/OASIS
 
 import argparse
 import os
