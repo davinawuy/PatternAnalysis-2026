@@ -1,10 +1,14 @@
-# Data audit for 2D segmentation datasets such as the OASIS brain slices.
+# Data audit for 2D segmentation datasets such as the OASIS brain slices and
+# the HipMRI pelvic slices.
 #
 # Makes no assumptions about the layout and reports what is actually on disk:
 #   * folder tree with file counts, extensions and sample filenames
+#   * filename patterns (digit runs replaced by '#'), to see how patient, scan
+#     and slice numbers are encoded before trusting any regex
 #   * for every leaf folder: image shapes, dtypes, intensity range and, for mask
-#     folders, the full set of unique label values
-#   * slice and patient counts per folder (patient ID taken from the filename by regex)
+#     folders, every label value with its share of all pixels (class imbalance)
+#   * slice and patient counts per folder (patient ID taken from the filename by
+#     regex), and scans per patient when --scan-regex is given
 #   * image/mask pairing per split (every image has a mask with a matching filename)
 #   * the patient overlap check between splits
 #
@@ -18,6 +22,8 @@
 #
 # Usage:
 #     python data_audit.py --root /home/groups/comp3710/OASIS
+#     python data_audit.py --root /home/groups/comp3710/HipMRI_Study_open/keras_slices_data \
+#         --scan-regex "(\d+_week_\d+)"
 
 import argparse
 import os
@@ -69,11 +75,14 @@ def print_tree(root, max_depth, n_samples):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(description="Audit a 2D segmentation dataset on disk.")
     parser.add_argument("--root", type=Path, required=True, help="dataset root directory")
     parser.add_argument("--patient-regex", default=r"(\d+)",
                         help="regex whose first group is the patient ID (default: first run of digits). "
                              "Verify it against the sample filenames in the tree output.")
+    parser.add_argument("--scan-regex",
+                        help="regex whose first group identifies one scan, e.g. patient and week, to count "
+                             "scans per patient. Verify it against the filename patterns first.")
     parser.add_argument("--max-depth", type=int, default=4)
     parser.add_argument("--tree-samples", type=int, default=3)
     parser.add_argument("--max-files", type=int, default=0,
@@ -89,6 +98,7 @@ def main():
             files_by_dir[path.parent].append(path)
 
     pattern = re.compile(args.patient_regex)
+    scan_pattern = re.compile(args.scan_regex) if args.scan_regex else None
     patients_by_split = defaultdict(set)
     names_by_split = defaultdict(lambda: {"image": set(), "mask": set()})
 
@@ -99,7 +109,10 @@ def main():
         kind = "mask" if any(h in name for h in MASK_HINTS) else "image"
         print(f"\n[{folder.relative_to(root).as_posix()}] split={split} kind={kind} files={len(paths)}")
 
-        shapes, dtypes, values = Counter(), Counter(), set()
+        templates = Counter(re.sub(r"\d+", "#", p.name) for p in paths)
+        print(f"  filename patterns: {dict(templates.most_common(5))}")
+
+        shapes, dtypes, values = Counter(), Counter(), Counter()
         lo, hi = float("inf"), float("-inf")
         for path in paths[:args.max_files or None]:
             arr = load_array(path)
@@ -108,12 +121,16 @@ def main():
             lo, hi = min(lo, arr.min()), max(hi, arr.max())
             # Mask label values must be known exactly to build the value -> class index map.
             if kind == "mask":
-                values.update(np.unique(arr).tolist())
-        print(f"  shapes={dict(shapes)}  dtypes={dict(dtypes)}  min={lo} max={hi}")
+                labels, counts = np.unique(arr, return_counts=True)
+                values.update(dict(zip(labels.tolist(), counts.tolist())))
+        print(f"  shapes ({len(shapes)} distinct, most common first)={dict(shapes.most_common(8))}")
+        print(f"  dtypes={dict(dtypes)}  min={lo} max={hi}")
         if len(shapes) > 1:
             print("  WARNING: shapes vary inside this folder")
         if kind == "mask":
-            print(f"  unique mask values ({len(values)}): {sorted(values)[:50]}")
+            total = sum(values.values())
+            shares = {v: f"{n / total:.4%}" for v, n in sorted(values.items())[:50]}
+            print(f"  unique mask values ({len(values)}) with pixel share: {shares}")
 
         slices_per_patient = Counter()
         unmatched = []
@@ -128,6 +145,12 @@ def main():
               f"median={statistics.median(counts)} max={max(counts)} e.g. {sorted(slices_per_patient)[:3]}")
         if unmatched:
             print(f"  WARNING: {len(unmatched)} filenames did not match the patient regex, e.g. {unmatched[:3]}")
+        if scan_pattern:
+            scans = {m.group(1) for p in paths if (m := scan_pattern.search(p.name))}
+            scans_per_patient = Counter(pattern.search(s).group(1) for s in scans if pattern.search(s))
+            per = list(scans_per_patient.values()) or [0]
+            print(f"  scans={len(scans)} scans/patient min={min(per)} median={statistics.median(per)} "
+                  f"max={max(per)} e.g. {sorted(scans)[:3]}")
 
         patients_by_split[split].update(slices_per_patient)
         names_by_split[split][kind].update(pairing_key(p.name, pattern) for p in paths)

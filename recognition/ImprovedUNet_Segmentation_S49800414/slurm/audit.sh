@@ -1,7 +1,7 @@
 #!/bin/bash
 
 #SBATCH --account=comp3710
-#SBATCH --job-name=oasis_audit
+#SBATCH --job-name=data_audit
 #SBATCH --partition=comp3710
 #SBATCH --gres=gpu:1
 #SBATCH --ntasks=1
@@ -9,9 +9,9 @@
 #SBATCH --output=%x_%j.out
 #SBATCH --error=%x_%j.err
 
-# OASIS data audit. Read-only; the report goes to the .out log.
-# Usage: sbatch slurm/audit_oasis.sh [extra data_audit.py args]
-#        DATA_ROOT=/other/path sbatch slurm/audit_oasis.sh
+# Dataset audit (OASIS by default). Read-only; the report goes to the .out log.
+# Usage: sbatch slurm/audit.sh [extra data_audit.py args]
+#        DATA_ROOT=/other/path sbatch -J hipmri-audit slurm/audit.sh --scan-regex "(\d+_week_\d+)"
 
 # Stop the job when a command fails.
 set -eo pipefail
