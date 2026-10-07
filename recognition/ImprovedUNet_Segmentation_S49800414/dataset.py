@@ -52,9 +52,9 @@ def load_mask(path):
     return torch.from_numpy(labels.astype(np.int64))
 
 
-def one_hot(mask):
-    """Class indices (..., H, W) -> float one-hot (..., C, H, W)."""
-    return F.one_hot(mask, NUM_CLASSES).movedim(-1, -3).float()
+def one_hot(masks):
+    """Batched class indices (B, *S) -> float one-hot (B, C, *S), for 2D or 3D masks."""
+    return F.one_hot(masks, NUM_CLASSES).movedim(-1, 1).float()
 
 
 def slice_key(path):
