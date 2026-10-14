@@ -219,10 +219,12 @@ class HipMRIDataset(OASISDataset):
     flip_dim = -2
 
 
+# key: filename -> (patient, ..., slice); everything but the slice identifies one scan.
 DATASETS = {
-    "oasis": {"root": ROOT, "classes": CLASS_NAMES, "pairs": split_pairs, "dataset": OASISDataset},
+    "oasis": {"root": ROOT, "classes": CLASS_NAMES, "pairs": split_pairs, "dataset": OASISDataset,
+              "key": slice_key},
     "hipmri": {"root": HIPMRI_ROOT, "classes": HIPMRI_CLASS_NAMES, "pairs": hipmri_split_pairs,
-               "dataset": HipMRIDataset},
+               "dataset": HipMRIDataset, "key": hipmri_key},
 }
 
 
@@ -314,7 +316,7 @@ if __name__ == "__main__":
     num_classes = len(spec["classes"])
 
     pairs = spec["pairs"](root or spec["root"])
-    key = slice_key if name == "oasis" else hipmri_key
+    key = spec["key"]
     for split in SPLITS:
         keys = [key(image) for image, _ in pairs[split]]
         print(f"{split}: {len(keys)} slices, {len({k[0] for k in keys})} patients, {len({k[:-1] for k in keys})} scans")

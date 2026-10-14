@@ -1,7 +1,7 @@
 #!/bin/bash
 
 #SBATCH --account=comp3710
-#SBATCH --job-name=oasis_eval
+#SBATCH --job-name=eval
 #SBATCH --partition=comp3710
 #SBATCH --gres=gpu:1
 #SBATCH --ntasks=1
@@ -9,24 +9,25 @@
 #SBATCH --output=%x_%j.out
 #SBATCH --error=%x_%j.err
 
-# Evaluate a trained OASIS model on the test split; extra arguments go to predict.py.
-# Usage: sbatch -J eval-improved slurm/predict.sh improved
-#        sbatch -J eval-baseline slurm/predict.sh baseline
+# Evaluate a trained model on the test split; the first argument is the run folder
+# under outputs/ and any extra arguments go to predict.py.
+# Usage: sbatch -J eval-improved        slurm/predict.sh improved
+#        sbatch -J eval-hipmri-improved slurm/predict.sh hipmri_improved
 
 # Stop the job when a command fails.
 set -eo pipefail
 
-MODEL="${1:-}"
+RUN="${1:-}"
 EXTRA=("${@:2}")
 # Clear the positional arguments so the Conda activate script does not inherit them.
 set --
 
-case "$MODEL" in
-    baseline|improved) ;;
-    *) echo "Usage: sbatch slurm/predict.sh baseline|improved [predict.py args]" >&2; exit 1 ;;
-esac
+if [ -z "$RUN" ] || [ ! -f "$HOME/ImprovedUNet_Segmentation_S49800414/outputs/$RUN/best.pt" ]; then
+    echo "Usage: sbatch slurm/predict.sh <run folder with outputs/<run>/best.pt> [predict.py args]" >&2
+    exit 1
+fi
 
-echo "Job: $SLURM_JOB_ID ($MODEL)"
+echo "Job: $SLURM_JOB_ID ($RUN)"
 echo "Host: $(hostname)"
 echo "Start: $(date)"
 
@@ -42,6 +43,6 @@ export PYTHONUNBUFFERED=1
 export MPLBACKEND=Agg
 
 nvidia-smi
-srun python -u predict.py --checkpoint "outputs/$MODEL/best.pt" "${EXTRA[@]}"
+srun python -u predict.py --checkpoint "outputs/$RUN/best.pt" "${EXTRA[@]}"
 
 echo "Finish: $(date)"

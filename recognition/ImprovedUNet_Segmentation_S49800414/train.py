@@ -47,9 +47,6 @@ def columns(names):
     return [name.lower().replace(" ", "_") for name in names]
 
 
-COLUMNS = columns(CLASS_NAMES)
-
-
 def dice_loss(logits, masks, smooth=1.0):
     """
     Multi-class soft Dice loss.
