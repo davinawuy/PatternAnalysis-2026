@@ -1,0 +1,2 @@
+# Keep LF line endings on Windows checkouts: Slurm rejects job scripts with CRLF.
+* text=auto eol=lf
