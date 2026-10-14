@@ -1,6 +1,7 @@
-# Training, validation and testing for the OASIS segmentation models.
+# Training, validation and testing for the 2D segmentation models.
 #
-# Trains the baseline U-Net or the Improved U-Net (selected with --model) with
+# Trains the baseline U-Net or the Improved U-Net (selected with --model) on
+# OASIS or HipMRI 2D slices (selected with --dataset) with
 # cross-entropy plus multi-class soft Dice loss, keeps the checkpoint with the
 # best mean validation Dice, plots the curves every epoch and finally scores the
 # best checkpoint on the test split.
@@ -8,10 +9,13 @@
 # Optimiser settings follow Isensee et al., "Brain Tumor Segmentation and
 # Radiomics Survival Prediction: Contribution to the BRATS 2017 Challenge", 2018:
 # Adam, initial learning rate 5e-4 decayed by 0.985 per epoch, L2 weight decay
-# 1e-5, and a Dice-based loss for class imbalance.
+# 1e-5, and a Dice-based loss for class imbalance. The same loss is kept for
+# HipMRI, where the prostate covers about 0.4% of pixels: averaging Dice over
+# classes already weights it as much as the body.
 #
 # Usage:
 #     python train.py --model improved
+#     python train.py --model improved --dataset hipmri
 #     python train.py --model baseline --epochs 2 --limit 64   # smoke test
 
 import argparse
@@ -29,12 +33,21 @@ import matplotlib.pyplot as plt
 import torch
 import torch.nn.functional as F
 
-from dataset import CLASS_NAMES, ROOT, get_loaders, one_hot
+from dataset import CLASS_NAMES, DATASETS, get_loaders, one_hot
 from modules import ImprovedUNet, UNet
 
 MODELS = {"baseline": UNet, "improved": ImprovedUNet}
 HERE = Path(__file__).resolve().parent
-COLUMNS = [name.lower().replace(" ", "_") for name in CLASS_NAMES]
+# Dice the task asks for on the test split: every OASIS tissue, the HipMRI prostate.
+TARGETS = {"oasis": 0.9, "hipmri": 0.75}
+
+
+def columns(names):
+    """Class names -> CSV column suffixes, e.g. 'Grey matter' -> 'grey_matter'."""
+    return [name.lower().replace(" ", "_") for name in names]
+
+
+COLUMNS = columns(CLASS_NAMES)
 
 
 def dice_loss(logits, masks, smooth=1.0):
@@ -52,13 +65,14 @@ def dice_loss(logits, masks, smooth=1.0):
     # Softmax probabilities instead of a hard argmax keep the loss differentiable.
     # Computed in float32 because bfloat16 loses precision when summing over a whole batch.
     probs = logits.float().softmax(1)
-    target = one_hot(masks)
+    target = one_hot(masks, probs.shape[1])
     sum_dims = (0, *range(2, probs.ndim))
     intersection = (probs * target).sum(sum_dims)
     total = probs.sum(sum_dims) + target.sum(sum_dims)
     # Averaging the per-class Dice gives every class equal weight however few
     # pixels it covers, so CSF (about 6% of pixels) counts as much as background
-    # (about 72%). Cross-entropy alone would be dominated by the background.
+    # (about 72%), and the HipMRI prostate (0.4%) as much as the body (68%).
+    # Cross-entropy alone would be dominated by the largest classes.
     return 1 - ((2 * intersection + smooth) / (total + smooth)).mean()
 
 
@@ -73,7 +87,8 @@ def dice_counts(logits, masks):
         (intersection, total), each (B, C): |P and G| and |P| + |G|. Returning the
         parts lets callers pool them over a whole split before dividing.
     """
-    pred, target = one_hot(logits.argmax(1)), one_hot(masks)
+    num_classes = logits.shape[1]
+    pred, target = one_hot(logits.argmax(1), num_classes), one_hot(masks, num_classes)
     sum_dims = tuple(range(2, pred.ndim))
     return (pred * target).sum(sum_dims), (pred + target).sum(sum_dims)
 
@@ -109,17 +124,17 @@ def run_epoch(model, loader, device, optimiser=None):
     return loss_sum / samples, (2 * intersection / total.clamp(min=1)).cpu()
 
 
-def plot_curves(history, path):
+def plot_curves(history, path, names=CLASS_NAMES, target=0.9):
     """Save loss curves and per-class validation Dice curves to one image."""
     epochs = [row["epoch"] for row in history]
     fig, (loss_ax, dice_ax) = plt.subplots(1, 2, figsize=(11, 4))
     for key in ("train_loss", "val_loss"):
         loss_ax.plot(epochs, [row[key] for row in history], label=key)
     loss_ax.set(title="Loss (cross-entropy + Dice)", xlabel="Epoch")
-    for column, name in zip(COLUMNS, CLASS_NAMES):
+    for column, name in zip(columns(names), names):
         dice_ax.plot(epochs, [row[f"val_dice_{column}"] for row in history], label=name)
     dice_ax.plot(epochs, [row["val_dice_mean"] for row in history], "k--", label="Mean")
-    dice_ax.axhline(0.9, color="grey", linewidth=0.8)  # the task's target on every label
+    dice_ax.axhline(target, color="grey", linewidth=0.8)  # the task's Dice target
     dice_ax.set(title="Validation Dice", xlabel="Epoch")
     for ax in (loss_ax, dice_ax):
         ax.legend(fontsize=8)
@@ -129,10 +144,12 @@ def plot_curves(history, path):
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Train an OASIS segmentation model.")
+    parser = argparse.ArgumentParser(description="Train a 2D segmentation model.")
     parser.add_argument("--model", choices=MODELS, default="improved")
-    parser.add_argument("--data-root", type=Path, default=ROOT)
-    parser.add_argument("--out", type=Path, help="output folder (default outputs/<model>)")
+    parser.add_argument("--dataset", choices=DATASETS, default="oasis")
+    parser.add_argument("--data-root", type=Path, help="dataset folder (default: the dataset's Rangpur folder)")
+    parser.add_argument("--out", type=Path,
+                        help="output folder (default outputs/<model> for OASIS, outputs/<dataset>_<model> otherwise)")
     parser.add_argument("--epochs", type=int, default=30)
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--lr", type=float, default=5e-4)
@@ -146,7 +163,9 @@ def parse_args():
 
 def main():
     args = parse_args()
-    out = args.out or HERE / "outputs" / args.model
+    names = DATASETS[args.dataset]["classes"]
+    names_csv = columns(names)
+    out = args.out or HERE / "outputs" / (args.model if args.dataset == "oasis" else f"{args.dataset}_{args.model}")
     out.mkdir(parents=True, exist_ok=True)
 
     # Seeds weight initialisation, shuffling and augmentation (DataLoader workers
@@ -156,8 +175,8 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"device {device}, args {vars(args)}", flush=True)
 
-    loaders = get_loaders(args.batch_size, args.workers, args.data_root, args.limit)
-    model = MODELS[args.model](dims=2).to(device)
+    loaders = get_loaders(args.batch_size, args.workers, args.data_root, args.limit, args.dataset)
+    model = MODELS[args.model](num_classes=len(names), dims=2).to(device)
     print(f"{args.model}: {sum(p.numel() for p in model.parameters()) / 1e6:.2f}M parameters", flush=True)
     optimiser = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     scheduler = torch.optim.lr_scheduler.ExponentialLR(optimiser, args.lr_decay)
@@ -174,14 +193,14 @@ def main():
 
         row = {"epoch": epoch, "lr": lr, "train_loss": train_loss, "val_loss": val_loss,
                "train_dice_mean": train_dice.mean().item(),
-               **{f"val_dice_{c}": d.item() for c, d in zip(COLUMNS, val_dice)},
+               **{f"val_dice_{c}": d.item() for c, d in zip(names_csv, val_dice)},
                "val_dice_mean": val_dice.mean().item(), "seconds": time.time() - start}
         history.append(row)
         with (out / "history.csv").open("w", newline="") as file:
             writer = csv.DictWriter(file, fieldnames=row.keys())
             writer.writeheader()
             writer.writerows(history)
-        plot_curves(history, out / "curves.png")
+        plot_curves(history, out / "curves.png", names, TARGETS[args.dataset])
 
         improved = row["val_dice_mean"] > best_dice
         if improved:
@@ -197,7 +216,7 @@ def main():
     model.load_state_dict(checkpoint["model"])
     test_loss, test_dice = run_epoch(model, loaders["test"], device)
     result = {"best_epoch": checkpoint["epoch"], "test_loss": test_loss,
-              "test_dice": dict(zip(CLASS_NAMES, test_dice.tolist())), "test_dice_mean": test_dice.mean().item()}
+              "test_dice": dict(zip(names, test_dice.tolist())), "test_dice_mean": test_dice.mean().item()}
     if device.type == "cuda":
         result["peak_vram_gb"] = torch.cuda.max_memory_allocated() / 1e9
     (out / "test.json").write_text(json.dumps(result, indent=2))

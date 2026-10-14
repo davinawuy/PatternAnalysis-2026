@@ -1,7 +1,7 @@
 #!/bin/bash
 
 #SBATCH --account=comp3710
-#SBATCH --job-name=oasis_train
+#SBATCH --job-name=train
 #SBATCH --partition=comp3710
 #SBATCH --gres=gpu:1
 #SBATCH --ntasks=1
@@ -9,10 +9,11 @@
 #SBATCH --output=%x_%j.out
 #SBATCH --error=%x_%j.err
 
-# Train one OASIS segmentation model; any extra arguments go to train.py.
-# Usage: sbatch -J oasis-improved slurm/train.sh improved
-#        sbatch -J oasis-baseline slurm/train.sh baseline
-#        sbatch -J oasis-smoke    slurm/train.sh improved --epochs 2 --limit 64 --out outputs/smoke_improved
+# Train one segmentation model; any extra arguments go to train.py.
+# Usage: sbatch -J oasis-improved  slurm/train.sh improved
+#        sbatch -J oasis-baseline  slurm/train.sh baseline
+#        sbatch -J hipmri-improved slurm/train.sh improved --dataset hipmri
+#        sbatch -J oasis-smoke     slurm/train.sh improved --epochs 2 --limit 64 --out outputs/smoke_improved
 
 # Stop the job when a command fails.
 set -eo pipefail
