@@ -14,7 +14,8 @@
 #   * multi-panel figures of the worst slices: input, ground truth, prediction
 #     and a false positive / false negative overlay
 # For HipMRI, the failure modes the spec names for prostate radiotherapy:
-#   * prostate Dice from apex to base, where global Dice hides local failure
+#   * prostate Dice from apex to base (axial levels, i.e. columns of the coronal
+#     slices), where global Dice hides local failure
 #   * leakage: prostate predicted on rectum or bladder pixels and the reverse
 #   * prostate predicted on slices without any prostate, and slices missed entirely
 #
@@ -189,40 +190,44 @@ def prostate_by_position(results, prostate, bladder):
     """
     Prostate Dice along the gland, for the spec's apex and base failure mode.
 
-    In each case the slices with prostate in the ground truth are placed from
-    apex (0) to base (1). The base is the end nearer the bladder, which lies
-    above the prostate, so the direction comes from the data rather than from an
-    assumed slice order. Cases without any bladder are skipped.
+    The HipMRI slices are coronal, so the foot-head axis is the last axis of the
+    stacked case (N slices, rows, columns): each column index is one axial
+    level. The levels with prostate in the ground truth are placed from apex (0)
+    to base (1). The base is the end nearer the bladder, which lies above the
+    prostate, so the direction comes from the labels rather than from an assumed
+    axis order. Cases without any bladder are skipped.
 
     Returns:
-        (per-slice rows [(position 0..1, slice Dice, case name)],
+        (per-level rows [(position 0..1, level Dice, case name)],
          {"apex" | "mid" | "base": Dice pooled over that third of the gland}).
     """
     rows, thirds = [], {name: np.zeros(2) for name in ("apex", "mid", "base")}
     for case_id, case in results.items():
-        prostate_pixels = (case["masks"] == prostate).sum((1, 2))
-        bladder_pixels = (case["masks"] == bladder).sum((1, 2))
-        present = prostate_pixels > 0
-        if not present.any() or not bladder_pixels.any():
+        truth, predicted = case["masks"] == prostate, case["preds"] == prostate
+        prostate_voxels = truth.sum((0, 1))
+        bladder_voxels = (case["masks"] == bladder).sum((0, 1))
+        present = prostate_voxels > 0
+        if not present.any() or not bladder_voxels.any():
             continue
-        slices = case["slices"]
-        first, last = slices[present].min(), slices[present].max()
-        position = (slices - first) / max(last - first, 1)
-        if np.average(slices, weights=bladder_pixels) < np.average(slices, weights=prostate_pixels):
+        levels = np.arange(len(present))
+        first, last = levels[present].min(), levels[present].max()
+        position = (levels - first) / max(last - first, 1)
+        if np.average(levels, weights=bladder_voxels) < np.average(levels, weights=prostate_voxels):
             position = 1 - position
-        for i in np.flatnonzero(present):
-            intersection, total = case["intersection"][i, prostate], case["total"][i, prostate]
-            rows.append((position[i], 2 * intersection / total, case_name(case_id)))
-            thirds[("apex", "mid", "base")[min(int(position[i] * 3), 2)]] += intersection, total
+        intersection = (truth & predicted).sum((0, 1))
+        total = prostate_voxels + predicted.sum((0, 1))
+        for z in np.flatnonzero(present):
+            rows.append((position[z], 2 * intersection[z] / total[z], case_name(case_id)))
+            thirds[("apex", "mid", "base")[min(int(position[z] * 3), 2)]] += intersection[z], total[z]
     return rows, {name: 2 * i / t if t else float("nan") for name, (i, t) in thirds.items()}
 
 
 def prostate_slices(results, prostate):
     """
-    Slice-level detection errors: prostate predicted on slices whose ground truth
-    has none (false-positive slices), and prostate slices with no prostate
-    predicted at all (missed slices). Slice Dice is undefined or zero on these,
-    so they need counting separately.
+    Slice-level detection errors on the (coronal) input slices: prostate
+    predicted on slices whose ground truth has none (false-positive slices), and
+    prostate slices with no prostate predicted at all (missed slices). Slice
+    Dice is undefined or zero on these, so they need counting separately.
     """
     without, with_prostate, missed, false_positive_pixels = 0, 0, 0, []
     for case in results.values():
@@ -326,7 +331,7 @@ def plot_distribution(per_case_dice, names, target, path):
 
 
 def plot_position(rows, thirds, target, path):
-    """Slice prostate Dice against position from apex to base, with the pooled Dice of each third."""
+    """Prostate Dice of each axial level against position from apex to base, with the pooled Dice of each third."""
     fig, ax = plt.subplots(figsize=(7, 4))
     for name in sorted({case for _, _, case in rows}):
         points = np.array([(p, d) for p, d, case in rows if case == name])
@@ -335,7 +340,7 @@ def plot_position(rows, thirds, target, path):
         ax.hlines(dice, i / 3, (i + 1) / 3, color="black", linewidth=2)
         ax.text((i + 0.5) / 3, 0.02, f"{name} {dice:.2f}", ha="center")
     ax.axhline(target, color="grey", linewidth=0.8)
-    ax.set(title="Prostate Dice per slice, apex (0) to base (1)", xlabel="Position in gland", ylabel="Dice",
+    ax.set(title="Prostate Dice per axial level, apex (0) to base (1)", xlabel="Position in gland", ylabel="Dice",
            ylim=(0, 1.02))
     ax.legend(fontsize=7, loc="lower right", ncol=2)
     fig.tight_layout()

@@ -5,8 +5,9 @@
 # 0, 85, 170 and 255. Images are scaled to [0, 1].
 #
 # HipMRI 2D: the same three-way patient-level split of Nifti slices
-# (case_PPP_week_W_slice_S.nii.gz), 60 slices per weekly scan, with masks
-# labelled 0-5. Every slice is 256x128 except one training scan at 256x144, which
+# (case_PPP_week_W_slice_S.nii.gz), 60 coronal slices per weekly scan (indices
+# 98-157 of the volume's front-back axis, rows left-right, columns foot to head),
+# with masks labelled 0-5. Every slice is 256x128 except one training scan at 256x144, which
 # is centre-cropped to 256x128. MRI intensities have no fixed scale between
 # scans, so each slice is standardised to zero mean and unit variance.
 #
@@ -287,9 +288,9 @@ class HipMRIDataset(OASISDataset):
 
     load_image = staticmethod(load_hipmri_image)
     load_mask = staticmethod(load_hipmri_mask)
-    # Rows run left-right (the femoral heads sit at the top and bottom of each
-    # slice in the label overlay). Flipping columns instead would swap front and
-    # back, putting the rectum in front of the bladder.
+    # The slices are coronal: rows run left-right and columns foot to head
+    # (check_hipmri_2d_3d). Flipping columns instead would put the bladder below
+    # the prostate.
     flip_dim = -2
 
 
