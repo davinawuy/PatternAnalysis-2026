@@ -4,11 +4,17 @@
 # split by patient, with masks storing four tissue classes as the grey levels
 # 0, 85, 170 and 255. Images are scaled to [0, 1].
 #
-# HipMRI: the same three-way patient-level split of Nifti slices
+# HipMRI 2D: the same three-way patient-level split of Nifti slices
 # (case_PPP_week_W_slice_S.nii.gz), 60 slices per weekly scan, with masks
 # labelled 0-5. Every slice is 256x128 except one training scan at 256x144, which
 # is centre-cropped to 256x128. MRI intensities have no fixed scale between
 # scans, so each slice is standardised to zero mean and unit variance.
+#
+# HipMRI 3D: the 211 Nifti volumes the slices come from (256x256x128, stored in
+# LPS orientation: left-right, front-back, foot-head), with the same labels. Each
+# patient keeps its 2D split, so 2D and 3D models are tested on the same scans.
+# Volumes are standardised as a whole and downsampled by an integer factor:
+# images by averaging, masks by the majority label of each block.
 #
 # Layouts, shapes and label values were confirmed by data_audit.py before this
 # loader was written. Masks are returned as class indices (H, W), which is what
@@ -23,9 +29,11 @@
 # Self-check (run on a compute node):
 #     python dataset.py --dataset oasis
 #     python dataset.py --dataset hipmri
+#     python dataset.py --dataset hipmri3d
 
 import itertools
 import os
+from collections import Counter, defaultdict
 import re
 from pathlib import Path
 
@@ -132,6 +140,72 @@ def hipmri_key(path):
     return int(match[1]), int(match[2]), int(match[3])
 
 
+# --------------------------------------------------------------- HipMRI 3D
+
+HIPMRI3D_ROOT = Path(os.environ.get("HIPMRI3D_ROOT", "/home/groups/comp3710/HipMRI_Study_open"))
+
+
+def hipmri3d_key(path):
+    """'B006_Week1_LFOV.nii.gz' or 'B006_Week1_SEMANTIC.nii.gz' -> (patient 6, week 1)."""
+    match = re.fullmatch(r"[A-Za-z]+(\d+)_Week(\d+)_(?:LFOV|SEMANTIC)\.nii\.gz", path.name)
+    if match is None:
+        raise ValueError(f"Unexpected filename: {path.name}")
+    return int(match[1]), int(match[2])
+
+
+def load_volume(path):
+    """Nifti volume -> array (256, 256, 128) in stored (LPS) axis order, centre-cropping the foot-head axis."""
+    return centre_crop(np.asarray(nib.load(str(path)).dataobj))
+
+
+def load_hipmri3d_image(path, factor=2):
+    """Nifti volume -> float32 tensor (1, 256/f, 256/f, 128/f), standardised over the whole volume."""
+    array = load_volume(path).astype(np.float32)
+    array = (array - array.mean()) / (array.std() + 1e-8)
+    image = torch.from_numpy(array).unsqueeze(0)
+    return F.avg_pool3d(image, factor) if factor > 1 else image
+
+
+def load_hipmri3d_mask(path, factor=2):
+    """Nifti mask volume -> int64 tensor (256/f, 256/f, 128/f) of class indices 0..5."""
+    full = np.asarray(nib.load(str(path)).dataobj)
+    if full.min() < 0 or full.max() >= len(HIPMRI_CLASS_NAMES):
+        raise ValueError(f"Unexpected mask values in {path}")
+    cropped = centre_crop(full)
+    if (full >= 3).sum() != (cropped >= 3).sum():
+        raise ValueError(f"Centre crop would remove organ pixels in {path}")
+    mask = torch.from_numpy(cropped.astype(np.int64))
+    if factor == 1:
+        return mask
+    # Majority label of each factor^3 block. Nearest-neighbour sampling would keep
+    # one voxel per block and could drop thin organ edges. Ties go to the higher
+    # label, i.e. the smaller organ (bladder < rectum < prostate in size order).
+    shares = torch.stack([F.avg_pool3d((mask == c).float()[None], factor)[0] for c in range(len(HIPMRI_CLASS_NAMES))])
+    return len(HIPMRI_CLASS_NAMES) - 1 - shares.flip(0).argmax(0)
+
+
+def hipmri3d_split_pairs(root=HIPMRI3D_ROOT, slices_root=None):
+    """
+    {split: [(image_path, mask_path), ...]} for the HipMRI volumes.
+
+    Each scan gets the split its 2D slices are in (slices_root, default
+    HIPMRI_ROOT), so the patient-level split and its overlap check carry over.
+    Raises if a scan exists only as volumes or only as slices.
+    """
+    scan_split = {hipmri_key(image)[:2]: split
+                  for split, pairs in hipmri_split_pairs(slices_root or HIPMRI_ROOT).items() for image, _ in pairs}
+    images = {hipmri3d_key(p): p for p in (root / "semantic_MRs").glob("*.nii.gz")}
+    masks = {hipmri3d_key(p): p for p in (root / "semantic_labels_only").glob("*.nii.gz")}
+    if not images or images.keys() != masks.keys():
+        raise ValueError(f"Volumes and masks under {root} do not pair up")
+    if images.keys() != scan_split.keys():
+        raise ValueError(f"Volumes and 2D slices cover different scans: {sorted(images.keys() ^ scan_split.keys())[:5]}")
+    pairs = {split: [] for split in SPLITS}
+    for key in sorted(images):
+        pairs[scan_split[key]].append((images[key], masks[key]))
+    return pairs
+
+
 # ----------------------------------------------------------------- shared
 
 def one_hot(masks, num_classes=NUM_CLASSES):
@@ -219,27 +293,55 @@ class HipMRIDataset(OASISDataset):
     flip_dim = -2
 
 
-# key: filename -> (patient, ..., slice); everything but the slice identifies one scan.
+class HipMRI3DDataset(OASISDataset):
+    """
+    (image (1, X, Y, Z) float, mask (X, Y, Z) int64) HipMRI volumes.
+
+    Args:
+        pairs: [(image_path, mask_path), ...] from hipmri3d_split_pairs.
+        augment: random left-right flip (training split only).
+        factor: integer downsampling factor along every axis (1 keeps 256x256x128).
+    """
+
+    # Axis 0 of the stored volume runs left-right (the L of LPS).
+    flip_dim = -3
+
+    def __init__(self, pairs, augment=False, factor=2):
+        super().__init__(pairs, augment)
+        self.factor = factor
+
+    def load_image(self, path):
+        return load_hipmri3d_image(path, self.factor)
+
+    def load_mask(self, path):
+        return load_hipmri3d_mask(path, self.factor)
+
+
+# key: filename -> (patient, ..., slice); everything but the slice identifies one
+# scan. Volumes have no slice number, so their key is the scan itself.
 DATASETS = {
     "oasis": {"root": ROOT, "classes": CLASS_NAMES, "pairs": split_pairs, "dataset": OASISDataset,
               "key": slice_key},
     "hipmri": {"root": HIPMRI_ROOT, "classes": HIPMRI_CLASS_NAMES, "pairs": hipmri_split_pairs,
                "dataset": HipMRIDataset, "key": hipmri_key},
+    "hipmri3d": {"root": HIPMRI3D_ROOT, "classes": HIPMRI_CLASS_NAMES, "pairs": hipmri3d_split_pairs,
+                 "dataset": HipMRI3DDataset, "key": hipmri3d_key},
 }
 
 
-def get_loaders(batch_size, workers=4, root=None, limit=0, dataset="oasis"):
+def get_loaders(batch_size, workers=4, root=None, limit=0, dataset="oasis", **dataset_args):
     """
     {split: DataLoader} for one dataset in DATASETS.
 
     Only train is shuffled and augmented. root=None uses the dataset's default
-    folder; limit>0 keeps N slices per split for debugging.
+    folder; limit>0 keeps N slices (or volumes) per split for debugging.
+    dataset_args go to the dataset class, e.g. factor=2 for hipmri3d.
     """
     spec = DATASETS[dataset]
     pairs = spec["pairs"](root or spec["root"])
     return {
         split: DataLoader(
-            spec["dataset"](pairs[split][:limit or None], augment=split == "train"),
+            spec["dataset"](pairs[split][:limit or None], augment=split == "train", **dataset_args),
             batch_size=batch_size,
             shuffle=split == "train",
             drop_last=split == "train",
@@ -304,6 +406,50 @@ def check_hipmri_labels(pairs, path):
     print(f"label overlay saved to {path}")
 
 
+def check_hipmri_2d_3d(pairs, split="test"):
+    """
+    Match every 2D slice of the split's scans to its 3D volume voxel for voxel, to
+    find which volume axis the slices were cut along, any flips, and which volume
+    slices they are. Prints one line per scan and returns the (axis, flips) counts.
+    """
+    slices = defaultdict(list)
+    for image_path, mask_path in hipmri_split_pairs()[split]:
+        patient, week, number = hipmri_key(image_path)
+        slices[patient, week].append((number, image_path, mask_path))
+    found = Counter()
+    for image_path, mask_path in pairs[split]:
+        scan = hipmri3d_key(mask_path)
+        volume = np.asarray(nib.load(str(mask_path)).dataobj)
+        image = np.asarray(nib.load(str(image_path)).dataobj)
+        matched, image_error = [], 0.0
+        for number, slice_image, slice_mask in sorted(slices[scan]):
+            target = np.rint(load_nifti_slice(slice_mask))
+            for axis, flips in itertools.product(range(3), ((), (0,), (1,), (0, 1))):
+                candidate = np.flip(target, flips) if flips else target
+                sections = np.moveaxis(volume, axis, 0)
+                if sections.shape[1:] != candidate.shape:
+                    continue
+                hits = np.flatnonzero((sections == candidate).all((1, 2)))
+                if len(hits):
+                    found[axis, flips] += 1
+                    index = hits[0]
+                    matched.append((number, index, len(hits)))
+                    section = np.moveaxis(image, axis, 0)[index]
+                    source = load_nifti_slice(slice_image)
+                    image_error = max(image_error, np.abs(section - (np.flip(source, flips) if flips else source)).max())
+                    break
+            else:
+                found["unmatched"] += 1
+        offsets = sorted({int(index - number) for number, index, _ in matched})
+        indices = [index for _, index, _ in matched]
+        print(f"  patient {scan[0]} week {scan[1]}: {len(matched)}/{len(slices[scan])} slices matched, "
+              f"volume indices {min(indices, default='-')}-{max(indices, default='-')}, "
+              f"index minus slice number {offsets[:3]}, ambiguous {sum(n > 1 for *_, n in matched)}, "
+              f"max image difference {image_error:.4g}")
+    print(f"{split} slices by (volume axis, flips): {dict(found)}")
+    return found
+
+
 if __name__ == "__main__":
     import argparse
 
@@ -317,18 +463,23 @@ if __name__ == "__main__":
 
     pairs = spec["pairs"](root or spec["root"])
     key = spec["key"]
+    volumes = name == "hipmri3d"
     for split in SPLITS:
         keys = [key(image) for image, _ in pairs[split]]
-        print(f"{split}: {len(keys)} slices, {len({k[0] for k in keys})} patients, {len({k[:-1] for k in keys})} scans")
+        scans = set(keys) if volumes else {k[:-1] for k in keys}
+        print(f"{split}: {len(keys)} {'volumes' if volumes else 'slices'}, {len({k[0] for k in keys})} patients, "
+              f"{len(scans)} scans")
 
-    images, masks = next(iter(get_loaders(batch_size=16, workers=0, root=root, dataset=name)["train"]))
-    assert images.dtype == torch.float32 and images.shape[:2] == (16, 1), images.shape
-    assert masks.dtype == torch.int64 and masks.shape == (16, *images.shape[2:]), masks.shape
+    batch = 2 if volumes else 16
+    images, masks = next(iter(get_loaders(batch_size=batch, workers=0, root=root, dataset=name)["train"]))
+    print("batch shapes", tuple(images.shape), tuple(masks.shape))
+    assert images.dtype == torch.float32 and images.shape[:2] == (batch, 1), images.shape
+    assert masks.dtype == torch.int64 and masks.shape == (batch, *images.shape[2:]), masks.shape
     # The networks downsample four times, so every spatial size must divide by 16.
     assert all(size % 16 == 0 for size in images.shape[2:]), images.shape
     assert 0 <= masks.min() and masks.max() < num_classes
     encoded = one_hot(masks, num_classes)
-    assert encoded.shape == (16, num_classes, *images.shape[2:]) and torch.all(encoded.sum(1) == 1)
+    assert encoded.shape == (batch, num_classes, *images.shape[2:]) and torch.all(encoded.sum(1) == 1)
 
     # Augmentation must flip image and mask together or not at all.
     plain, augmented = spec["dataset"](pairs["train"][:1]), spec["dataset"](pairs["train"][:1], augment=True)
@@ -345,4 +496,14 @@ if __name__ == "__main__":
     print("class share in one batch:", {n: round(s.item(), 4) for n, s in zip(spec["classes"], share)})
     if name == "hipmri":
         check_hipmri_labels(pairs, HERE / "outputs" / "hipmri_labels.png")
+    if volumes:
+        # Downsampling must keep the small organs: compare voxel counts with full resolution.
+        mask_path = pairs["train"][0][1]
+        full, small = load_hipmri3d_mask(mask_path, 1), load_hipmri3d_mask(mask_path, 2)
+        full_counts = torch.bincount(full.flatten(), minlength=num_classes)
+        small_counts = 8 * torch.bincount(small.flatten(), minlength=num_classes)
+        print("voxels per class, full resolution vs 8 x downsampled by 2:",
+              {n: (a.item(), b.item()) for n, a, b in zip(spec["classes"], full_counts, small_counts)})
+        found = check_hipmri_2d_3d(pairs)
+        assert "unmatched" not in found, "some 2D slices match no volume section"
     print("dataset self-check passed")
