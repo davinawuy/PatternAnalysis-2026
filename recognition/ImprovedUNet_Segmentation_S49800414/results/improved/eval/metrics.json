@@ -1,0 +1,100 @@
+{
+  "model": "improved",
+  "best_epoch": 28,
+  "split": "test",
+  "cases": 17,
+  "dice_pooled": {
+    "Background": 0.9994147419929504,
+    "CSF": 0.9663588404655457,
+    "Grey matter": 0.9669244885444641,
+    "White matter": 0.9801910519599915
+  },
+  "iou_pooled": {
+    "Background": 0.9988301992416382,
+    "CSF": 0.9349074363708496,
+    "Grey matter": 0.9359669089317322,
+    "White matter": 0.961151659488678
+  },
+  "dice_per_case_mean": {
+    "Background": 0.9994148015975952,
+    "CSF": 0.9596301913261414,
+    "Grey matter": 0.9664084315299988,
+    "White matter": 0.9800575375556946
+  },
+  "dice_per_case_std": {
+    "Background": 0.00018072983948513865,
+    "CSF": 0.022741833701729774,
+    "Grey matter": 0.008379370905458927,
+    "White matter": 0.006170313339680433
+  },
+  "dice_per_case_min": {
+    "Background": 0.9991024732589722,
+    "CSF": 0.8949411511421204,
+    "Grey matter": 0.9426935315132141,
+    "White matter": 0.964730978012085
+  },
+  "iou_per_case_mean": {
+    "Background": 0.9988303184509277,
+    "CSF": 0.9232842326164246,
+    "Grey matter": 0.935126543045044,
+    "White matter": 0.9609663486480713
+  },
+  "connectivity": {
+    "CSF": {
+      "truth_components_per_slice": 37.369485294117645,
+      "predicted_components_per_slice": 37.79044117647059,
+      "slices_more_components": 0.48161764705882354,
+      "slices_fewer_components": 0.3860294117647059
+    },
+    "Grey matter": {
+      "truth_components_per_slice": 13.106617647058824,
+      "predicted_components_per_slice": 14.036764705882353,
+      "slices_more_components": 0.5367647058823529,
+      "slices_fewer_components": 0.2977941176470588
+    },
+    "White matter": {
+      "truth_components_per_slice": 8.09375,
+      "predicted_components_per_slice": 8.4375,
+      "slices_more_components": 0.43014705882352944,
+      "slices_fewer_components": 0.2922794117647059
+    }
+  },
+  "profile": {
+    "parameters": 3187580,
+    "inference_peak_vram_gb": 0.808442368,
+    "latency_per_case_ms": 24.769512552987127,
+    "latency_per_slice_ms": 0.7740472672808477,
+    "slices_per_case": 32.0,
+    "device": "NVIDIA A100-PCIE-40GB",
+    "training_epochs": 30,
+    "training_minutes": 9.945255335172018,
+    "training_peak_vram_gb": 1.559946752
+  },
+  "worst_slices": [
+    {
+      "patient": 453,
+      "slice": 2,
+      "mean_tissue_dice": 0.9212979674339294
+    },
+    {
+      "patient": 448,
+      "slice": 31,
+      "mean_tissue_dice": 0.923793613910675
+    },
+    {
+      "patient": 442,
+      "slice": 31,
+      "mean_tissue_dice": 0.9449089169502258
+    },
+    {
+      "patient": 444,
+      "slice": 31,
+      "mean_tissue_dice": 0.9499163031578064
+    },
+    {
+      "patient": 450,
+      "slice": 1,
+      "mean_tissue_dice": 0.9528800845146179
+    }
+  ]
+}
