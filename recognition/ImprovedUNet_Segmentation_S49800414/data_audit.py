@@ -7,6 +7,8 @@
 #     and slice numbers are encoded before trusting any regex
 #   * for every leaf folder: image shapes, dtypes, intensity range and, for mask
 #     folders, every label value with its share of all pixels (class imbalance)
+#   * for Nifti files: voxel spacing and orientation (axis codes such as RAS),
+#     which decide how 3D volumes can be resampled and which axis is which
 #   * slice and patient counts per folder (patient ID taken from the filename by
 #     regex), and scans per patient when --scan-regex is given
 #   * image/mask pairing per split (every image has a mask with a matching filename)
@@ -24,6 +26,7 @@
 #     python data_audit.py --root /home/groups/comp3710/OASIS
 #     python data_audit.py --root /home/groups/comp3710/HipMRI_Study_open/keras_slices_data \
 #         --scan-regex "(\d+_week_\d+)"
+#     python data_audit.py --root /home/groups/comp3710/HipMRI_Study_open --skip keras_slices_data
 
 import argparse
 import os
@@ -51,6 +54,13 @@ def load_array(path):
         return np.asarray(nib.load(str(path)).dataobj)
     with Image.open(path) as img:
         return np.array(img)
+
+
+def nifti_geometry(path):
+    """(voxel spacing rounded to 0.01 mm, orientation axis codes) from a Nifti header, without reading the voxels."""
+    import nibabel as nib
+    image = nib.load(str(path))
+    return tuple(round(float(z), 2) for z in image.header.get_zooms()), "".join(nib.aff2axcodes(image.affine))
 
 
 def pairing_key(name, pattern):
@@ -87,6 +97,8 @@ def main():
     parser.add_argument("--tree-samples", type=int, default=3)
     parser.add_argument("--max-files", type=int, default=0,
                         help="read at most this many files per folder (0 = all; OASIS PNGs are small)")
+    parser.add_argument("--skip", nargs="*", default=[],
+                        help="folder names to leave out of the per-folder audit (still shown in the tree)")
     args = parser.parse_args()
 
     root = args.root.resolve()
@@ -94,7 +106,7 @@ def main():
 
     files_by_dir = defaultdict(list)
     for path in sorted(root.rglob("*")):
-        if path.is_file() and is_image(path):
+        if path.is_file() and is_image(path) and not set(args.skip) & set(path.relative_to(root).parts):
             files_by_dir[path.parent].append(path)
 
     pattern = re.compile(args.patient_regex)
@@ -112,10 +124,12 @@ def main():
         templates = Counter(re.sub(r"\d+", "#", p.name) for p in paths)
         print(f"  filename patterns: {dict(templates.most_common(5))}")
 
-        shapes, dtypes, values = Counter(), Counter(), Counter()
+        shapes, dtypes, values, geometry = Counter(), Counter(), Counter(), Counter()
         lo, hi = float("inf"), float("-inf")
         for path in paths[:args.max_files or None]:
             arr = load_array(path)
+            if path.name.lower().endswith((".nii", ".nii.gz")):
+                geometry[nifti_geometry(path)] += 1
             shapes[arr.shape] += 1
             dtypes[str(arr.dtype)] += 1
             lo, hi = min(lo, arr.min()), max(hi, arr.max())
@@ -125,6 +139,8 @@ def main():
                 values.update(dict(zip(labels.tolist(), counts.tolist())))
         print(f"  shapes ({len(shapes)} distinct, most common first)={dict(shapes.most_common(8))}")
         print(f"  dtypes={dict(dtypes)}  min={lo} max={hi}")
+        if geometry:
+            print(f"  (spacing mm, orientation) ({len(geometry)} distinct)={dict(geometry.most_common(8))}")
         if len(shapes) > 1:
             print("  WARNING: shapes vary inside this folder")
         if kind == "mask":
