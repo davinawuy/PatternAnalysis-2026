@@ -1,0 +1,205 @@
+{
+  "model": "baseline",
+  "dataset": "hipmri",
+  "best_epoch": 24,
+  "split": "test",
+  "cases": 9,
+  "dice_pooled": {
+    "Background": 0.9966830611228943,
+    "Body": 0.9843406677246094,
+    "Bone": 0.9332782030105591,
+    "Bladder": 0.964341402053833,
+    "Rectum": 0.8799996376037598,
+    "Prostate": 0.8530219197273254
+  },
+  "iou_pooled": {
+    "Background": 0.9933881163597107,
+    "Body": 0.969164252281189,
+    "Bone": 0.8749030828475952,
+    "Bladder": 0.9311383366584778,
+    "Rectum": 0.7857136726379395,
+    "Prostate": 0.7437124848365784
+  },
+  "dice_per_case_mean": {
+    "Background": 0.9966526031494141,
+    "Body": 0.9843361973762512,
+    "Bone": 0.9333422183990479,
+    "Bladder": 0.961512565612793,
+    "Rectum": 0.8775773048400879,
+    "Prostate": 0.8536492586135864
+  },
+  "dice_per_case_std": {
+    "Background": 0.0020827355328947306,
+    "Body": 0.0022314467933028936,
+    "Bone": 0.0077737909741699696,
+    "Bladder": 0.010494939051568508,
+    "Rectum": 0.01730845496058464,
+    "Prostate": 0.01830914244055748
+  },
+  "dice_per_case_min": {
+    "Background": 0.9914131164550781,
+    "Body": 0.9804012179374695,
+    "Bone": 0.9232690334320068,
+    "Bladder": 0.9458224177360535,
+    "Rectum": 0.8416131138801575,
+    "Prostate": 0.821729302406311
+  },
+  "iou_per_case_mean": {
+    "Background": 0.993336021900177,
+    "Body": 0.9691650867462158,
+    "Bone": 0.8751158118247986,
+    "Bladder": 0.9260740280151367,
+    "Rectum": 0.7822810411453247,
+    "Prostate": 0.7451093196868896
+  },
+  "confusion_pixels": {
+    "rows_truth_columns_prediction": [
+      "Background",
+      "Body",
+      "Bone",
+      "Bladder",
+      "Rectum",
+      "Prostate"
+    ],
+    "counts": [
+      [
+        2846496,
+        14343,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        4597,
+        11889729,
+        149582,
+        22679,
+        11671,
+        5339
+      ],
+      [
+        0,
+        140302,
+        2027573,
+        24,
+        0,
+        0
+      ],
+      [
+        0,
+        7048,
+        2,
+        412417,
+        8,
+        176
+      ],
+      [
+        6,
+        11910,
+        0,
+        497,
+        90031,
+        255
+      ],
+      [
+        0,
+        10822,
+        0,
+        66,
+        207,
+        48940
+      ]
+    ]
+  },
+  "connectivity": {
+    "Body": {
+      "truth_components_per_slice": 1.6203703703703705,
+      "predicted_components_per_slice": 1.5296296296296297,
+      "slices_more_components": 0.10185185185185185,
+      "slices_fewer_components": 0.12777777777777777
+    },
+    "Bone": {
+      "truth_components_per_slice": 4.253703703703704,
+      "predicted_components_per_slice": 4.07037037037037,
+      "slices_more_components": 0.16111111111111112,
+      "slices_fewer_components": 0.24444444444444444
+    },
+    "Bladder": {
+      "truth_components_per_slice": 0.7481481481481481,
+      "predicted_components_per_slice": 0.7592592592592593,
+      "slices_more_components": 0.016666666666666666,
+      "slices_fewer_components": 0.005555555555555556
+    },
+    "Rectum": {
+      "truth_components_per_slice": 0.47962962962962963,
+      "predicted_components_per_slice": 0.47962962962962963,
+      "slices_more_components": 0.046296296296296294,
+      "slices_fewer_components": 0.05
+    },
+    "Prostate": {
+      "truth_components_per_slice": 0.36666666666666664,
+      "predicted_components_per_slice": 0.3351851851851852,
+      "slices_more_components": 0.009259259259259259,
+      "slices_fewer_components": 0.03888888888888889
+    }
+  },
+  "profile": {
+    "parameters": 7762630,
+    "inference_peak_vram_gb": 1.109098496,
+    "latency_per_case_ms": 21.8681157566607,
+    "latency_per_slice_ms": 0.364468595944345,
+    "slices_per_case": 60.0,
+    "device": "NVIDIA A100-PCIE-40GB",
+    "training_epochs": 30,
+    "training_minutes": 19.92649120092392,
+    "training_peak_vram_gb": 0.939876352
+  },
+  "prostate_dice_by_position": {
+    "apex": 0.8273725711067305,
+    "mid": 0.9015415309906077,
+    "base": 0.8076998471007959
+  },
+  "prostate_leakage": {
+    "predicted_prostate_on_rectum": 0.004660939499177482,
+    "predicted_prostate_on_bladder": 0.003216962164138183,
+    "true_prostate_predicted_rectum": 0.0034479886732739235,
+    "true_prostate_predicted_bladder": 0.0010993587074206712
+  },
+  "prostate_slices": {
+    "slices_without_prostate": 345,
+    "false_positive_slices": 5,
+    "false_positive_slice_share": 0.014492753623188406,
+    "false_positive_pixels_median": 121.0,
+    "slices_with_prostate": 195,
+    "missed_slices": 20,
+    "missed_slice_share": 0.10256410256410256
+  },
+  "worst_slices": [
+    {
+      "case": "patient 40 week 3",
+      "slice": 33,
+      "mean_foreground_dice": 0.5583614110946655
+    },
+    {
+      "case": "patient 40 week 4",
+      "slice": 35,
+      "mean_foreground_dice": 0.5819991230964661
+    },
+    {
+      "case": "patient 42 week 0",
+      "slice": 37,
+      "mean_foreground_dice": 0.5877232551574707
+    },
+    {
+      "case": "patient 41 week 0",
+      "slice": 39,
+      "mean_foreground_dice": 0.6666672229766846
+    },
+    {
+      "case": "patient 40 week 0",
+      "slice": 53,
+      "mean_foreground_dice": 0.6979403495788574
+    }
+  ]
+}
