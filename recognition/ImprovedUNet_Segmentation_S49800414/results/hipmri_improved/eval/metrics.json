@@ -147,8 +147,8 @@
   "profile": {
     "parameters": 3187842,
     "inference_peak_vram_gb": 0.762438144,
-    "latency_per_case_ms": 24.138301197025513,
-    "latency_per_slice_ms": 0.4023050199504252,
+    "latency_per_case_ms": 23.790039380805357,
+    "latency_per_slice_ms": 0.39650065634675596,
     "slices_per_case": 60.0,
     "device": "NVIDIA A100-PCIE-40GB",
     "training_epochs": 30,
@@ -156,9 +156,9 @@
     "training_peak_vram_gb": 0.810744832
   },
   "prostate_dice_by_position": {
-    "apex": 0.8044507575757576,
-    "mid": 0.9153048837426464,
-    "base": 0.7781815245478036
+    "apex": 0.8071094807633521,
+    "mid": 0.886114830274868,
+    "base": 0.8460066953610712
   },
   "prostate_leakage": {
     "predicted_prostate_on_rectum": 0.003628229740916216,
