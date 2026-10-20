@@ -251,7 +251,7 @@ def main():
 
     volumes = args.dataset == "hipmri3d"
     loaders = get_loaders(args.batch_size, args.workers, args.data_root, args.limit, args.dataset,
-                          **({"factor": args.downsample} if volumes else {}))
+                          **({"factor": args.downsample, "cache": HERE / "outputs" / "cache"} if volumes else {}))
     model = MODELS[args.model](num_classes=len(names), dims=3 if volumes else 2).to(device)
     print(f"{args.model}: {sum(p.numel() for p in model.parameters()) / 1e6:.2f}M parameters", flush=True)
     optimiser = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)

@@ -32,6 +32,7 @@
 #     python dataset.py --dataset hipmri
 #     python dataset.py --dataset hipmri3d
 
+import hashlib
 import itertools
 import os
 from collections import Counter, defaultdict
@@ -302,20 +303,43 @@ class HipMRI3DDataset(OASISDataset):
         pairs: [(image_path, mask_path), ...] from hipmri3d_split_pairs.
         augment: random left-right flip (training split only).
         factor: integer downsampling factor along every axis (1 keeps 256x256x128).
+        cache: folder for preprocessed volumes, or None to preprocess on every read.
+            Decompressing and downsampling a volume takes far longer than a
+            training step, so without a cache data loading dominates each epoch.
     """
 
     # Axis 0 of the stored volume runs left-right (the L of LPS).
     flip_dim = -3
 
-    def __init__(self, pairs, augment=False, factor=2):
+    def __init__(self, pairs, augment=False, factor=2, cache=None):
         super().__init__(pairs, augment)
-        self.factor = factor
+        self.factor, self.cache = factor, cache
+
+    def cached(self, path, load):
+        """load(path, factor), saved under self.cache after the first call."""
+        if self.cache is None:
+            return load(path, self.factor)
+        # The name hashes the full source path, so different data folders never share entries.
+        # Note: cache entries are not invalidated when the preprocessing code changes; delete the cache folder then.
+        digest = hashlib.md5(str(Path(path).resolve()).encode()).hexdigest()[:12]
+        file = Path(self.cache) / f"{digest}_x{self.factor}_{Path(path).name}.pt"
+        if file.exists():
+            tensor = torch.load(file)
+            return tensor.long() if tensor.dtype == torch.uint8 else tensor
+        tensor = load(path, self.factor)
+        file.parent.mkdir(parents=True, exist_ok=True)
+        # Masks are stored as uint8 (labels 0-5) to save space. Writing to a temporary
+        # file first means a reader in another worker never sees a half-written entry.
+        temporary = file.with_name(f"{file.name}.{os.getpid()}.tmp")
+        torch.save(tensor.to(torch.uint8) if tensor.dtype == torch.int64 else tensor, temporary)
+        os.replace(temporary, file)
+        return tensor
 
     def load_image(self, path):
-        return load_hipmri3d_image(path, self.factor)
+        return self.cached(path, load_hipmri3d_image)
 
     def load_mask(self, path):
-        return load_hipmri3d_mask(path, self.factor)
+        return self.cached(path, load_hipmri3d_mask)
 
 
 # key: filename -> (patient, ..., slice); everything but the slice identifies one
