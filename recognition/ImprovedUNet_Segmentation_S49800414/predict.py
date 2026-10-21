@@ -1,4 +1,4 @@
-# Test-set evaluation and visualisation for a trained 2D segmentation model.
+# Test-set evaluation and visualisation for a trained segmentation model.
 #
 # Loads best.pt from train.py (which records whether it was trained on OASIS or
 # HipMRI), runs inference one case at a time and reports what the COMP3710
@@ -18,6 +18,11 @@
 #     slices), where global Dice hides local failure
 #   * leakage: prostate predicted on rectum or bladder pixels and the reverse
 #   * prostate predicted on slices without any prostate, and slices missed entirely
+# For HipMRI 3D checkpoints, every test volume is predicted at the training
+# resolution and scored against the full-resolution masks. With --compare, a
+# 2D checkpoint is run on the same scans and both are scored on the coronal slab
+# the 2D slices come from, so 2D and 3D are compared on identical voxels. The
+# acceptance criteria of the feasibility review (AC1-AC5) are checked.
 #
 # NumPy and SciPy are used here for metrics and plotting only; the model itself
 # is pure PyTorch (modules.py).
@@ -25,6 +30,7 @@
 # Usage:
 #     python predict.py --checkpoint outputs/improved/best.pt
 #     python predict.py --checkpoint outputs/hipmri_improved/best.pt
+#     python predict.py --checkpoint outputs/hipmri3d_improved/best.pt --compare outputs/hipmri_improved/best.pt
 
 import argparse
 import csv
@@ -41,10 +47,11 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+import torch.nn.functional as F
 from matplotlib.colors import ListedColormap
 from scipy import ndimage
 
-from dataset import DATASETS
+from dataset import DATASETS, hipmri3d_key, load_hipmri3d_image, load_hipmri3d_mask, load_volume
 from train import MODELS, TARGETS, columns, dice_counts
 
 # One fixed colour per class index so every figure reads the same way.
@@ -67,7 +74,7 @@ def load_model(path, device):
     # Checkpoints from before the --dataset option are all OASIS.
     settings.setdefault("dataset", "oasis")
     num_classes = len(DATASETS[settings["dataset"]]["classes"])
-    model = MODELS[settings["model"]](num_classes=num_classes, dims=2)
+    model = MODELS[settings["model"]](num_classes=num_classes, dims=3 if settings["dataset"] == "hipmri3d" else 2)
     model.load_state_dict(checkpoint["model"])
     return model.to(device).eval(), checkpoint
 
@@ -348,14 +355,251 @@ def plot_position(rows, thirds, target, path):
     plt.close(fig)
 
 
+# ---------------------------------------------------------------- HipMRI 3D
+
+# The 2D HipMRI slices are the coronal sections 98-157 of each volume's
+# front-back axis (verified voxel for voxel by dataset.check_hipmri_2d_3d), so
+# 2D and 3D predictions can be compared on exactly these voxels.
+SLAB = slice(98, 158)
+# 26-connectivity: voxels touching at a face, edge or corner count as connected.
+CONNECTIVITY_3D = np.ones((3, 3, 3), dtype=int)
+# Acceptance limits from the approved feasibility review (AC3-AC5).
+MAX_LEAKAGE, MAX_TRAINING_VRAM_GB, MAX_TRAINING_MINUTES, MAX_INFERENCE_SECONDS = 0.01, 10, 60, 1
+
+
+def predict_volume(model, image, shape, device):
+    """
+    Downsampled image (1, x, y, z) -> uint8 labels at full resolution (shape).
+
+    Logits are upsampled trilinearly before the argmax, so the 3D model is scored
+    against the original masks rather than the majority-vote downsampled ones,
+    which inflate small organs by about 3%.
+    """
+    logits = infer(model, image[None].to(device), device)
+    logits = F.interpolate(logits, size=shape, mode="trilinear", align_corners=False)
+    return logits.argmax(1)[0].to(torch.uint8).cpu().numpy()
+
+
+def predict_slab(model, volume, device):
+    """
+    2D model predictions for the coronal slab a volume's 2D slices were cut from.
+
+    Args:
+        volume: (256, 256, 128) raw image volume in stored (LPS) order.
+    Returns:
+        uint8 labels (256, 60, 128) in volume order.
+    """
+    # The 2D files hold volume[:, 98 + s, :] flipped left-right; rebuild them and
+    # standardise each slice exactly as dataset.load_hipmri_image does.
+    sections = np.flip(volume[:, SLAB, :], 0).transpose(1, 0, 2).astype(np.float64)
+    sections = (sections - sections.mean((1, 2), keepdims=True)) / (sections.std((1, 2), keepdims=True) + 1e-8)
+    images = torch.from_numpy(sections.astype(np.float32))[:, None]
+    labels = infer(model, images.to(device), device).argmax(1).to(torch.uint8).cpu().numpy()
+    return np.ascontiguousarray(np.flip(labels.transpose(1, 0, 2), 0))
+
+
+def summarise_volumes(results, names):
+    """
+    Pooled Dice and IoU per class, prostate Dice by third of the gland, leakage,
+    and per-case prostate Dice and connected components, for a dict of
+    {case: {"masks": labels, "preds": labels}} arrays whose last axis is foot-head.
+    """
+    prostate, bladder, rectum = (names.index(n) for n in ("Prostate", "Bladder", "Rectum"))
+    matrix = confusion(results, len(names))
+    dice, iou = dice_iou(np.diag(matrix), matrix.sum(0) + matrix.sum(1))
+    rows, thirds = prostate_by_position(results, prostate, bladder)
+    per_case = {}
+    for case, arrays in results.items():
+        truth, predicted = arrays["masks"] == prostate, arrays["preds"] == prostate
+        per_case[case_name(case)] = {
+            "prostate_dice": 2 * (truth & predicted).sum() / max(truth.sum() + predicted.sum(), 1),
+            "prostate_components": int(ndimage.label(predicted, CONNECTIVITY_3D)[1]),
+        }
+    summary = {
+        "dice": dict(zip(names, dice)),
+        "iou": dict(zip(names, iou)),
+        "prostate_dice_by_position": thirds,
+        "predicted_prostate_on_rectum": matrix[rectum, prostate] / max(matrix[:, prostate].sum(), 1),
+        "predicted_prostate_on_bladder": matrix[bladder, prostate] / max(matrix[:, prostate].sum(), 1),
+        "per_case": per_case,
+    }
+    return summary, rows
+
+
+def plot_position_2d_3d(rows_3d, thirds_3d, rows_2d, thirds_2d, target, path):
+    """Prostate Dice of each axial level from apex to base on the shared slab, 3D against 2D."""
+    fig, ax = plt.subplots(figsize=(7, 4))
+    for label, rows, thirds, colour in (("3D", rows_3d, thirds_3d, "tab:blue"), ("2D", rows_2d, thirds_2d, "tab:orange")):
+        if rows:
+            ax.scatter(*np.array([(p, d) for p, d, _ in rows]).T, s=8, alpha=0.5, color=colour, label=label)
+        for i, dice in enumerate(thirds.values()):
+            ax.hlines(dice, i / 3, (i + 1) / 3, color=colour, linewidth=2)
+    ax.axhline(target, color="grey", linewidth=0.8)
+    ax.set(title="Prostate Dice per axial level on the shared coronal slab, apex (0) to base (1)",
+           xlabel="Position in gland", ylabel="Dice", ylim=(0, 1.02))
+    ax.title.set_fontsize(9)
+    ax.legend(fontsize=8, loc="lower right")
+    fig.tight_layout()
+    fig.savefig(path, dpi=120)
+    plt.close(fig)
+
+
+def plot_worst_volumes(cases, results, slab_2d, images, names, path):
+    """
+    One row per volume: the axial slice through the prostate centre, showing the
+    image, ground truth, 3D prediction and (inside the slab only) 2D prediction.
+    """
+    colours = ListedColormap(COLOURS[:len(names)])
+    columns_ = 4 if slab_2d else 3
+    fig, axes = plt.subplots(len(cases), columns_, figsize=(3.2 * columns_, 3.8 * len(cases)), squeeze=False)
+    prostate = names.index("Prostate")
+    for row, case in zip(axes, cases):
+        mask, pred = results[case]["masks"], results[case]["preds"]
+        levels = np.flatnonzero((mask == prostate).any((0, 1)))
+        z = int(levels.mean()) if len(levels) else mask.shape[2] // 2
+        panels = [(images[case][:, :, z], "gray", None, f"{case_name(case)}, axial level {z}"),
+                  (mask[:, :, z], colours, len(names) - 1, "Ground truth"),
+                  (pred[:, :, z], colours, len(names) - 1, "3D prediction")]
+        if slab_2d:
+            # Outside the slab the 2D model never predicted anything; show it as background.
+            band = np.zeros_like(mask[:, :, z])
+            band[:, SLAB] = slab_2d[case]["preds"][:, :, z]
+            panels.append((band, colours, len(names) - 1, "2D prediction (coronal slab only)"))
+        for ax, (values, cmap, vmax, title) in zip(row, panels):
+            ax.imshow(values.T, cmap=cmap, vmin=0 if vmax else None, vmax=vmax, interpolation="nearest", origin="lower")
+            ax.set_title(title, fontsize=8)
+            ax.axis("off")
+    handles = [plt.Rectangle((0, 0), 1, 1, color=colours(i)) for i in range(len(names))]
+    fig.legend(handles, names, loc="lower center", ncol=len(names), fontsize=8)
+    fig.suptitle("Test volumes with the lowest full-resolution prostate Dice", fontsize=10)
+    fig.tight_layout(rect=(0, 0.04, 1, 0.97))
+    fig.savefig(path, dpi=110)
+    plt.close(fig)
+
+
+def evaluate_volumes(args, model, checkpoint, device, out):
+    """
+    Score a 3D HipMRI checkpoint at full resolution on every test volume, and,
+    with --compare, a 2D checkpoint on the same scans' coronal slab. Writes
+    metrics.json (including the acceptance criteria), per_case.csv and figures.
+    """
+    settings = checkpoint["settings"]
+    spec = DATASETS["hipmri3d"]
+    names = spec["classes"]
+    factor = settings.get("downsample", 2)
+    pairs = spec["pairs"](args.data_root or spec["root"])[args.split][:args.limit or None]
+    model_2d = load_model(args.compare, device)[0] if args.compare else None
+    if device.type == "cuda":
+        torch.cuda.reset_peak_memory_stats()
+
+    full, slab_3d, slab_2d, images, seconds = {}, {}, {}, {}, []
+    for image_path, mask_path in pairs:
+        case = hipmri3d_key(mask_path)
+        mask = load_hipmri3d_mask(mask_path, 1).numpy().astype(np.uint8)
+        image = load_hipmri3d_image(image_path, factor)
+        if not seconds:
+            predict_volume(model, image, mask.shape, device)  # warm-up, as in evaluate()
+        synchronise(device)
+        start = time.perf_counter()
+        pred = predict_volume(model, image, mask.shape, device)
+        synchronise(device)
+        seconds.append(time.perf_counter() - start)
+        full[case] = {"masks": mask, "preds": pred}
+        slab_3d[case] = {"masks": mask[:, SLAB], "preds": pred[:, SLAB]}
+        volume = load_volume(image_path)
+        images[case] = volume
+        if model_2d is not None:
+            slab_2d[case] = {"masks": mask[:, SLAB], "preds": predict_slab(model_2d, volume, device)}
+
+    summary_full, _ = summarise_volumes(full, names)
+    summary_3d, rows_3d = summarise_volumes(slab_3d, names)
+    summary_2d, rows_2d = summarise_volumes(slab_2d, names) if slab_2d else (None, [])
+
+    run = args.checkpoint.parent
+    history = list(csv.DictReader((run / "history.csv").open(newline=""))) if (run / "history.csv").exists() else []
+    training = json.loads((run / "test.json").read_text()) if (run / "test.json").exists() else {}
+    profile = {
+        "parameters": sum(p.numel() for p in model.parameters()),
+        "input_size": list(image.shape[1:]),
+        "inference_peak_vram_gb": torch.cuda.max_memory_allocated() / 1e9 if device.type == "cuda" else None,
+        "inference_seconds_per_volume": float(np.mean(seconds)),
+        "training_minutes": sum(float(row["seconds"]) for row in history) / 60 if history else None,
+        "training_peak_vram_gb": training.get("peak_vram_gb"),
+        "device": torch.cuda.get_device_name() if device.type == "cuda" else "cpu",
+    }
+
+    foreground = names[1:]
+    single = sum(c["prostate_components"] == 1 for c in summary_full["per_case"].values())
+    acceptance = {
+        "AC1_dice_every_foreground_label": {
+            "lowest": min(summary_full["dice"][n] for n in foreground),
+            "pass": all(summary_full["dice"][n] >= TARGETS["hipmri3d"] for n in foreground)},
+        "AC3_leakage": {
+            "rectum": summary_full["predicted_prostate_on_rectum"], "bladder": summary_full["predicted_prostate_on_bladder"],
+            "pass": max(summary_full["predicted_prostate_on_rectum"], summary_full["predicted_prostate_on_bladder"]) < MAX_LEAKAGE},
+        # "At least 8 of 9" in the review: every volume but one.
+        "AC4_single_prostate_component": {"volumes": single, "of": len(full), "pass": single >= len(full) - 1},
+        "AC5_resources": {
+            "training_peak_vram_gb": profile["training_peak_vram_gb"], "training_minutes": profile["training_minutes"],
+            "inference_seconds_per_volume": profile["inference_seconds_per_volume"],
+            "pass": (profile["training_peak_vram_gb"] or 0) <= MAX_TRAINING_VRAM_GB
+                    and (profile["training_minutes"] or 0) <= MAX_TRAINING_MINUTES
+                    and profile["inference_seconds_per_volume"] <= MAX_INFERENCE_SECONDS},
+    }
+    if summary_2d:
+        third_3d, third_2d = summary_3d["prostate_dice_by_position"], summary_2d["prostate_dice_by_position"]
+        acceptance["AC2_apex_base_vs_2d"] = {
+            "3d": third_3d, "2d": third_2d,
+            "pass": third_3d["apex"] >= third_2d["apex"] and third_3d["base"] >= third_2d["base"]}
+
+    metrics = {
+        "model": settings["model"], "dataset": "hipmri3d", "best_epoch": checkpoint["epoch"], "split": args.split,
+        "compare_2d": str(args.compare) if args.compare else None, "cases": len(full),
+        "full_volume": summary_full, "slab_3d": summary_3d, "slab_2d": summary_2d,
+        "acceptance": acceptance, "profile": profile,
+    }
+    (out / "metrics.json").write_text(json.dumps(metrics, indent=2, default=float))
+
+    with (out / "per_case.csv").open("w", newline="") as file:
+        writer = csv.writer(file)
+        writer.writerow(["patient", "week", "prostate_dice_full", "prostate_components", "prostate_dice_slab_3d",
+                         "prostate_dice_slab_2d", "latency_ms"])
+        for case, latency in zip(full, seconds):
+            name = case_name(case)
+            writer.writerow([*case, round(summary_full["per_case"][name]["prostate_dice"], 5),
+                             summary_full["per_case"][name]["prostate_components"],
+                             round(summary_3d["per_case"][name]["prostate_dice"], 5),
+                             round(summary_2d["per_case"][name]["prostate_dice"], 5) if summary_2d else "",
+                             round(latency * 1000, 2)])
+
+    plot_position_2d_3d(rows_3d, summary_3d["prostate_dice_by_position"], rows_2d,
+                        summary_2d["prostate_dice_by_position"] if summary_2d else {}, TARGETS["hipmri3d"],
+                        out / "prostate_position.png")
+    worst = sorted(full, key=lambda c: summary_full["per_case"][case_name(c)]["prostate_dice"])[:args.worst]
+    plot_worst_volumes(worst, full, slab_2d, images, names, out / "worst_cases.png")
+
+    print(f"{settings['model']} 3D (epoch {checkpoint['epoch']}) on hipmri3d {args.split}: {len(full)} volumes, "
+          f"input {profile['input_size']}, scored at full resolution")
+    print(f"{'class':10s} {'Dice full':>9s} {'IoU full':>9s} {'Dice slab 3D':>13s} {'Dice slab 2D':>13s}")
+    for n in names:
+        print(f"{n:10s} {summary_full['dice'][n]:9.4f} {summary_full['iou'][n]:9.4f} {summary_3d['dice'][n]:13.4f} "
+              + (f"{summary_2d['dice'][n]:13.4f}" if summary_2d else f"{'-':>13s}"))
+    for key, value in acceptance.items():
+        print(f"{key}: {'PASS' if value['pass'] else 'FAIL'}  {json.dumps({k: v for k, v in value.items() if k != 'pass'}, default=float)}")
+    print("profile", json.dumps(profile, default=float))
+    print(f"saved to {out}")
+
+
 def parse_args():
-    parser = argparse.ArgumentParser(description="Evaluate a trained 2D segmentation model.")
+    parser = argparse.ArgumentParser(description="Evaluate a trained segmentation model.")
     parser.add_argument("--checkpoint", type=Path, required=True, help="best.pt written by train.py")
     parser.add_argument("--data-root", type=Path, help="dataset folder (default: the dataset's Rangpur folder)")
     parser.add_argument("--split", choices=("validate", "test"), default="test")
     parser.add_argument("--out", type=Path, help="output folder (default: eval/ next to the checkpoint)")
     parser.add_argument("--worst", type=int, default=5, help="number of worst slices to plot")
-    parser.add_argument("--limit", type=int, default=0, help="use only N slices (smoke tests)")
+    parser.add_argument("--limit", type=int, default=0, help="use only N slices or volumes (smoke tests)")
+    parser.add_argument("--compare", type=Path,
+                        help="hipmri3d only: a HipMRI 2D best.pt to score on the same scans' coronal slab")
     return parser.parse_args()
 
 
@@ -367,6 +611,9 @@ def main():
 
     model, checkpoint = load_model(args.checkpoint, device)
     name, dataset = checkpoint["settings"]["model"], checkpoint["settings"]["dataset"]
+    if dataset == "hipmri3d":
+        evaluate_volumes(args, model, checkpoint, device, out)
+        return
     spec = DATASETS[dataset]
     names, target = spec["classes"], TARGETS[dataset]
     pairs = spec["pairs"](args.data_root or spec["root"])[args.split][:args.limit or None]
