@@ -1,0 +1,245 @@
+{
+  "model": "baseline",
+  "dataset": "hipmri3d",
+  "best_epoch": 19,
+  "split": "test",
+  "compare_2d": "outputs/hipmri_baseline_seed2/best.pt",
+  "cases": 9,
+  "full_volume": {
+    "dice": {
+      "Background": 0.9949484743913932,
+      "Body": 0.9813271684040481,
+      "Bone": 0.9184666013629448,
+      "Bladder": 0.9503861871466048,
+      "Rectum": 0.8383481164296274,
+      "Prostate": 0.8707792568162178
+    },
+    "iou": {
+      "Background": 0.9899477280917556,
+      "Body": 0.9633389032930283,
+      "Bone": 0.8492262952955436,
+      "Bladder": 0.9054627287754167,
+      "Rectum": 0.7216861852390225,
+      "Prostate": 0.7711328914850596
+    },
+    "prostate_dice_by_position": {
+      "apex": 0.8384977640587281,
+      "mid": 0.932821712681329,
+      "base": 0.8647119112339022
+    },
+    "predicted_prostate_on_rectum": 0.0008472268449877454,
+    "predicted_prostate_on_bladder": 0.02189173651245121,
+    "per_case": {
+      "patient 40 week 0": {
+        "prostate_dice": 0.8731097961867192,
+        "prostate_components": 1
+      },
+      "patient 40 week 1": {
+        "prostate_dice": 0.865278934221482,
+        "prostate_components": 1
+      },
+      "patient 40 week 2": {
+        "prostate_dice": 0.8782442400509972,
+        "prostate_components": 1
+      },
+      "patient 40 week 3": {
+        "prostate_dice": 0.8811030314477287,
+        "prostate_components": 1
+      },
+      "patient 40 week 4": {
+        "prostate_dice": 0.8257910228108903,
+        "prostate_components": 1
+      },
+      "patient 40 week 5": {
+        "prostate_dice": 0.8856721371934354,
+        "prostate_components": 1
+      },
+      "patient 40 week 7": {
+        "prostate_dice": 0.8554063327124791,
+        "prostate_components": 1
+      },
+      "patient 41 week 0": {
+        "prostate_dice": 0.9022893045425002,
+        "prostate_components": 1
+      },
+      "patient 42 week 0": {
+        "prostate_dice": 0.8669150918285866,
+        "prostate_components": 1
+      }
+    }
+  },
+  "slab_3d": {
+    "dice": {
+      "Background": 0.9687387966934041,
+      "Body": 0.977625863097635,
+      "Bone": 0.9300593635212476,
+      "Bladder": 0.9543048098224007,
+      "Rectum": 0.8626932104018028,
+      "Prostate": 0.8707792568162178
+    },
+    "iou": {
+      "Background": 0.9393728704107919,
+      "Body": 0.9562310193601823,
+      "Bone": 0.8692625850553134,
+      "Bladder": 0.9126032315978456,
+      "Rectum": 0.7585404556554055,
+      "Prostate": 0.7711328914850596
+    },
+    "prostate_dice_by_position": {
+      "apex": 0.8384977640587281,
+      "mid": 0.932821712681329,
+      "base": 0.8647119112339022
+    },
+    "predicted_prostate_on_rectum": 0.0008472268449877454,
+    "predicted_prostate_on_bladder": 0.02189173651245121,
+    "per_case": {
+      "patient 40 week 0": {
+        "prostate_dice": 0.8731097961867192,
+        "prostate_components": 1
+      },
+      "patient 40 week 1": {
+        "prostate_dice": 0.865278934221482,
+        "prostate_components": 1
+      },
+      "patient 40 week 2": {
+        "prostate_dice": 0.8782442400509972,
+        "prostate_components": 1
+      },
+      "patient 40 week 3": {
+        "prostate_dice": 0.8811030314477287,
+        "prostate_components": 1
+      },
+      "patient 40 week 4": {
+        "prostate_dice": 0.8257910228108903,
+        "prostate_components": 1
+      },
+      "patient 40 week 5": {
+        "prostate_dice": 0.8856721371934354,
+        "prostate_components": 1
+      },
+      "patient 40 week 7": {
+        "prostate_dice": 0.8554063327124791,
+        "prostate_components": 1
+      },
+      "patient 41 week 0": {
+        "prostate_dice": 0.9022893045425002,
+        "prostate_components": 1
+      },
+      "patient 42 week 0": {
+        "prostate_dice": 0.8669150918285866,
+        "prostate_components": 1
+      }
+    }
+  },
+  "slab_2d": {
+    "dice": {
+      "Background": 0.9965751634215494,
+      "Body": 0.9848793276517146,
+      "Bone": 0.9386160768106786,
+      "Bladder": 0.9629472881829523,
+      "Rectum": 0.8515319983447581,
+      "Prostate": 0.8698543354960502
+    },
+    "iou": {
+      "Background": 0.9931737057852208,
+      "Body": 0.9702091135366071,
+      "Bone": 0.8843322913637686,
+      "Bladder": 0.9285422787196097,
+      "Rectum": 0.7414503469992011,
+      "Prostate": 0.7696833804851623
+    },
+    "prostate_dice_by_position": {
+      "apex": 0.8543755022628262,
+      "mid": 0.9055510172326604,
+      "base": 0.8571979930528754
+    },
+    "predicted_prostate_on_rectum": 8.685984295740393e-05,
+    "predicted_prostate_on_bladder": 0.003248558126606907,
+    "per_case": {
+      "patient 40 week 0": {
+        "prostate_dice": 0.8519562225571794,
+        "prostate_components": 1
+      },
+      "patient 40 week 1": {
+        "prostate_dice": 0.8796023564064801,
+        "prostate_components": 1
+      },
+      "patient 40 week 2": {
+        "prostate_dice": 0.8845935190449119,
+        "prostate_components": 1
+      },
+      "patient 40 week 3": {
+        "prostate_dice": 0.8701563562202583,
+        "prostate_components": 1
+      },
+      "patient 40 week 4": {
+        "prostate_dice": 0.850440483507478,
+        "prostate_components": 1
+      },
+      "patient 40 week 5": {
+        "prostate_dice": 0.9000525486074619,
+        "prostate_components": 1
+      },
+      "patient 40 week 7": {
+        "prostate_dice": 0.899231613611416,
+        "prostate_components": 1
+      },
+      "patient 41 week 0": {
+        "prostate_dice": 0.8532442612465354,
+        "prostate_components": 1
+      },
+      "patient 42 week 0": {
+        "prostate_dice": 0.8654808818830546,
+        "prostate_components": 1
+      }
+    }
+  },
+  "acceptance": {
+    "AC1_dice_every_foreground_label": {
+      "lowest": 0.8383481164296274,
+      "pass": true
+    },
+    "AC3_leakage": {
+      "rectum": 0.0008472268449877454,
+      "bladder": 0.02189173651245121,
+      "pass": 0.0
+    },
+    "AC4_single_prostate_component": {
+      "volumes": 9,
+      "of": 9,
+      "pass": true
+    },
+    "AC5_resources": {
+      "training_peak_vram_gb": 2.623251456,
+      "training_minutes": 4.248884908358256,
+      "inference_seconds_per_volume": 0.023619755895601377,
+      "pass": true
+    },
+    "AC2_apex_base_vs_2d": {
+      "3d": {
+        "apex": 0.8384977640587281,
+        "mid": 0.932821712681329,
+        "base": 0.8647119112339022
+      },
+      "2d": {
+        "apex": 0.8543755022628262,
+        "mid": 0.9055510172326604,
+        "base": 0.8571979930528754
+      },
+      "pass": 0.0
+    }
+  },
+  "profile": {
+    "parameters": 22578438,
+    "input_size": [
+      128,
+      128,
+      64
+    ],
+    "inference_peak_vram_gb": 1.202995712,
+    "inference_seconds_per_volume": 0.023619755895601377,
+    "training_minutes": 4.248884908358256,
+    "training_peak_vram_gb": 2.623251456,
+    "device": "NVIDIA A100-PCIE-40GB"
+  }
+}
