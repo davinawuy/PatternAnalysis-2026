@@ -218,6 +218,8 @@ def parse_args():
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--limit", type=int, default=0, help="use only N slices (or volumes) per split (smoke tests)")
+    parser.add_argument("--mask-ties", choices=("random", "smaller"), default="random",
+                        help="hipmri3d only: how mask downsampling breaks ties (see dataset.load_hipmri3d_mask)")
     parser.add_argument("--downsample", type=int, default=2,
                         help="hipmri3d only: integer downsampling factor per axis (1 = full 256x256x128)")
     parser.add_argument("--vram-test", action="store_true",
@@ -251,7 +253,8 @@ def main():
 
     volumes = args.dataset == "hipmri3d"
     loaders = get_loaders(args.batch_size, args.workers, args.data_root, args.limit, args.dataset,
-                          **({"factor": args.downsample, "cache": HERE / "outputs" / "cache"} if volumes else {}))
+                          **({"factor": args.downsample, "ties": args.mask_ties, "cache": HERE / "outputs" / "cache"}
+                             if volumes else {}))
     model = MODELS[args.model](num_classes=len(names), dims=3 if volumes else 2).to(device)
     print(f"{args.model}: {sum(p.numel() for p in model.parameters()) / 1e6:.2f}M parameters", flush=True)
     optimiser = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)

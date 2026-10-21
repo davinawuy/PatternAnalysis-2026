@@ -466,7 +466,8 @@ def plot_worst_volumes(cases, results, slab_2d, images, names, path):
             band[:, SLAB] = slab_2d[case]["preds"][:, :, z]
             panels.append((band, colours, len(names) - 1, "2D prediction (coronal slab only)"))
         for ax, (values, cmap, vmax, title) in zip(row, panels):
-            ax.imshow(values.T, cmap=cmap, vmin=0 if vmax else None, vmax=vmax, interpolation="nearest", origin="lower")
+            # Radiological view: front of the body at the top, patient's right on the left.
+            ax.imshow(values.T, cmap=cmap, vmin=0 if vmax else None, vmax=vmax, interpolation="nearest")
             ax.set_title(title, fontsize=8)
             ax.axis("off")
     handles = [plt.Rectangle((0, 0), 1, 1, color=colours(i)) for i in range(len(names))]

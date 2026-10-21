@@ -15,7 +15,8 @@
 # LPS orientation: left-right, front-back, foot-head), with the same labels. Each
 # patient keeps its 2D split, so 2D and 3D models are tested on the same scans.
 # Volumes are standardised as a whole and downsampled by an integer factor:
-# images by averaging, masks by the majority label of each block.
+# images by averaging, masks by the majority label of each block (exact ties
+# broken at random, so no class gains voxels).
 #
 # Layouts, shapes and label values were confirmed by data_audit.py before this
 # loader was written. Masks are returned as class indices (H, W), which is what
@@ -168,8 +169,15 @@ def load_hipmri3d_image(path, factor=2):
     return F.avg_pool3d(image, factor) if factor > 1 else image
 
 
-def load_hipmri3d_mask(path, factor=2):
-    """Nifti mask volume -> int64 tensor (256/f, 256/f, 128/f) of class indices 0..5."""
+def load_hipmri3d_mask(path, factor=2, ties="random"):
+    """
+    Nifti mask volume -> int64 tensor (256/f, 256/f, 128/f) of class indices 0..5.
+
+    ties: how a block split equally between classes is labelled. "random" picks
+        one of the tied classes with a fixed seed, so no class is favoured;
+        "smaller" gives it to the higher label (the smaller organ), which inflates
+        the prostate by about 3.6% and is kept to reproduce the first 3D runs.
+    """
     full = np.asarray(nib.load(str(path)).dataobj)
     if full.min() < 0 or full.max() >= len(HIPMRI_CLASS_NAMES):
         raise ValueError(f"Unexpected mask values in {path}")
@@ -180,10 +188,16 @@ def load_hipmri3d_mask(path, factor=2):
     if factor == 1:
         return mask
     # Majority label of each factor^3 block. Nearest-neighbour sampling would keep
-    # one voxel per block and could drop thin organ edges. Ties go to the higher
-    # label, i.e. the smaller organ (bladder < rectum < prostate in size order).
+    # one voxel per block and could drop thin organ edges.
     shares = torch.stack([F.avg_pool3d((mask == c).float()[None], factor)[0] for c in range(len(HIPMRI_CLASS_NAMES))])
-    return len(HIPMRI_CLASS_NAMES) - 1 - shares.flip(0).argmax(0)
+    if ties == "smaller":
+        return len(HIPMRI_CLASS_NAMES) - 1 - shares.flip(0).argmax(0)
+    if ties != "random":
+        raise ValueError(f"Unknown tie rule {ties!r}")
+    # Shares are multiples of 1/factor^3, so noise below half of that only
+    # reorders classes with exactly equal shares.
+    noise = torch.rand(shares.shape, generator=torch.Generator().manual_seed(0)) / (2 * factor ** 3)
+    return (shares + noise).argmax(0)
 
 
 def hipmri3d_split_pairs(root=HIPMRI3D_ROOT, slices_root=None):
@@ -303,6 +317,7 @@ class HipMRI3DDataset(OASISDataset):
         pairs: [(image_path, mask_path), ...] from hipmri3d_split_pairs.
         augment: random left-right flip (training split only).
         factor: integer downsampling factor along every axis (1 keeps 256x256x128).
+        ties: tie rule for mask downsampling, see load_hipmri3d_mask.
         cache: folder for preprocessed volumes, or None to preprocess on every read.
             Decompressing and downsampling a volume takes far longer than a
             training step, so without a cache data loading dominates each epoch.
@@ -311,22 +326,22 @@ class HipMRI3DDataset(OASISDataset):
     # Axis 0 of the stored volume runs left-right (the L of LPS).
     flip_dim = -3
 
-    def __init__(self, pairs, augment=False, factor=2, cache=None):
+    def __init__(self, pairs, augment=False, factor=2, ties="random", cache=None):
         super().__init__(pairs, augment)
-        self.factor, self.cache = factor, cache
+        self.factor, self.ties, self.cache = factor, ties, cache
 
-    def cached(self, path, load):
-        """load(path, factor), saved under self.cache after the first call."""
+    def cached(self, path, load, tag):
+        """load(path), saved under self.cache after the first call; tag names the preprocessing."""
         if self.cache is None:
-            return load(path, self.factor)
+            return load(path)
         # The name hashes the full source path, so different data folders never share entries.
         # Note: cache entries are not invalidated when the preprocessing code changes; delete the cache folder then.
         digest = hashlib.md5(str(Path(path).resolve()).encode()).hexdigest()[:12]
-        file = Path(self.cache) / f"{digest}_x{self.factor}_{Path(path).name}.pt"
+        file = Path(self.cache) / f"{digest}_{tag}_{Path(path).name}.pt"
         if file.exists():
             tensor = torch.load(file)
             return tensor.long() if tensor.dtype == torch.uint8 else tensor
-        tensor = load(path, self.factor)
+        tensor = load(path)
         file.parent.mkdir(parents=True, exist_ok=True)
         # Masks are stored as uint8 (labels 0-5) to save space. Writing to a temporary
         # file first means a reader in another worker never sees a half-written entry.
@@ -336,10 +351,10 @@ class HipMRI3DDataset(OASISDataset):
         return tensor
 
     def load_image(self, path):
-        return self.cached(path, load_hipmri3d_image)
+        return self.cached(path, lambda p: load_hipmri3d_image(p, self.factor), f"x{self.factor}")
 
     def load_mask(self, path):
-        return self.cached(path, load_hipmri3d_mask)
+        return self.cached(path, lambda p: load_hipmri3d_mask(p, self.factor, self.ties), f"x{self.factor}_{self.ties}")
 
 
 # key: filename -> (patient, ..., slice); everything but the slice identifies one
@@ -524,11 +539,12 @@ if __name__ == "__main__":
     if volumes:
         # Downsampling must keep the small organs: compare voxel counts with full resolution.
         mask_path = pairs["train"][0][1]
-        full, small = load_hipmri3d_mask(mask_path, 1), load_hipmri3d_mask(mask_path, 2)
-        full_counts = torch.bincount(full.flatten(), minlength=num_classes)
-        small_counts = 8 * torch.bincount(small.flatten(), minlength=num_classes)
-        print("voxels per class, full resolution vs 8 x downsampled by 2:",
-              {n: (a.item(), b.item()) for n, a, b in zip(spec["classes"], full_counts, small_counts)})
+        full_counts = torch.bincount(load_hipmri3d_mask(mask_path, 1).flatten(), minlength=num_classes)
+        for ties in ("random", "smaller"):
+            small = load_hipmri3d_mask(mask_path, 2, ties)
+            change = 8 * torch.bincount(small.flatten(), minlength=num_classes) / full_counts - 1
+            print(f"voxel count change when downsampling by 2, ties {ties}:",
+                  {n: f"{c.item():+.2%}" for n, c in zip(spec["classes"], change)})
         found = check_hipmri_2d_3d(pairs)
         assert "unmatched" not in found, "some 2D slices match no volume section"
     print("dataset self-check passed")
