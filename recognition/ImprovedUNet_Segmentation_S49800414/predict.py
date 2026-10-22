@@ -537,7 +537,7 @@ def evaluate_volumes(args, model, checkpoint, device, out):
             "pass": all(summary_full["dice"][n] >= TARGETS["hipmri3d"] for n in foreground)},
         "AC3_leakage": {
             "rectum": summary_full["predicted_prostate_on_rectum"], "bladder": summary_full["predicted_prostate_on_bladder"],
-            "pass": max(summary_full["predicted_prostate_on_rectum"], summary_full["predicted_prostate_on_bladder"]) < MAX_LEAKAGE},
+            "pass": bool(max(summary_full["predicted_prostate_on_rectum"], summary_full["predicted_prostate_on_bladder"]) < MAX_LEAKAGE)},
         # "At least 8 of 9" in the review: every volume but one.
         "AC4_single_prostate_component": {"volumes": single, "of": len(full), "pass": single >= len(full) - 1},
         "AC5_resources": {
@@ -551,7 +551,7 @@ def evaluate_volumes(args, model, checkpoint, device, out):
         third_3d, third_2d = summary_3d["prostate_dice_by_position"], summary_2d["prostate_dice_by_position"]
         acceptance["AC2_apex_base_vs_2d"] = {
             "3d": third_3d, "2d": third_2d,
-            "pass": third_3d["apex"] >= third_2d["apex"] and third_3d["base"] >= third_2d["base"]}
+            "pass": bool(third_3d["apex"] >= third_2d["apex"] and third_3d["base"] >= third_2d["base"])}
 
     metrics = {
         "model": settings["model"], "dataset": "hipmri3d", "best_epoch": checkpoint["epoch"], "split": args.split,
