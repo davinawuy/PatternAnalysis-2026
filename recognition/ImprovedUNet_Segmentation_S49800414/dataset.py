@@ -1,4 +1,4 @@
-# Data loading for 2D segmentation of OASIS brain slices and HipMRI pelvic slices.
+# Data loading for segmentation of OASIS brain slices, HipMRI pelvic slices and HipMRI pelvic volumes.
 #
 # OASIS: train / validate / test folders of 256x256 8-bit PNG slices, already
 # split by patient, with masks storing four tissue classes as the grey levels

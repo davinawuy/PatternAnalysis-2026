@@ -1,5 +1,5 @@
-# Data audit for 2D segmentation datasets such as the OASIS brain slices and
-# the HipMRI pelvic slices.
+# Data audit for segmentation datasets such as the OASIS brain slices and the
+# HipMRI pelvic slices and volumes.
 #
 # Makes no assumptions about the layout and reports what is actually on disk:
 #   * folder tree with file counts, extensions and sample filenames
@@ -85,7 +85,7 @@ def print_tree(root, max_depth, n_samples):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Audit a 2D segmentation dataset on disk.")
+    parser = argparse.ArgumentParser(description="Audit a segmentation dataset on disk.")
     parser.add_argument("--root", type=Path, required=True, help="dataset root directory")
     parser.add_argument("--patient-regex", default=r"(\d+)",
                         help="regex whose first group is the patient ID (default: first run of digits). "

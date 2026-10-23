@@ -373,7 +373,7 @@ def predict_volume(model, image, shape, device):
 
     Logits are upsampled trilinearly before the argmax, so the 3D model is scored
     against the original masks rather than the majority-vote downsampled ones,
-    which inflate small organs by about 3%.
+    whose organ sizes depend on the tie rule (about +3% with ties to the smaller organ).
     """
     logits = infer(model, image[None].to(device), device)
     logits = F.interpolate(logits, size=shape, mode="trilinear", align_corners=False)
@@ -597,7 +597,7 @@ def parse_args():
     parser.add_argument("--data-root", type=Path, help="dataset folder (default: the dataset's Rangpur folder)")
     parser.add_argument("--split", choices=("validate", "test"), default="test")
     parser.add_argument("--out", type=Path, help="output folder (default: eval/ next to the checkpoint)")
-    parser.add_argument("--worst", type=int, default=5, help="number of worst slices to plot")
+    parser.add_argument("--worst", type=int, default=5, help="number of worst slices (volumes for hipmri3d) to plot")
     parser.add_argument("--limit", type=int, default=0, help="use only N slices or volumes (smoke tests)")
     parser.add_argument("--compare", type=Path,
                         help="hipmri3d only: a HipMRI 2D best.pt to score on the same scans' coronal slab")
