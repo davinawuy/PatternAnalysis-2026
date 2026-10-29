@@ -22,7 +22,9 @@
 # resolution and scored against the full-resolution masks. With --compare, a
 # 2D checkpoint is run on the same scans and both are scored on the coronal slab
 # the 2D slices come from, so 2D and 3D are compared on identical voxels. The
-# acceptance criteria of the feasibility review (AC1-AC5) are checked.
+# acceptance criteria of the feasibility review (AC1-AC5) are checked, and the
+# worst volumes are drawn at their worst apex and base levels with prostate
+# false positive / false negative overlays.
 #
 # NumPy and SciPy are used here for metrics and plotting only; the model itself
 # is pure PyTorch (modules.py).
@@ -193,16 +195,37 @@ def connectivity(results, names):
     return summary
 
 
+def gland_position(masks, prostate, bladder):
+    """
+    Position of every axial level along the prostate, from apex (0) to base (1).
+
+    The foot-head axis is the last axis of masks (the columns of the coronal
+    HipMRI slices, the last volume axis in 3D). The levels with prostate in the
+    ground truth are placed from apex to base. The base is the end nearer the
+    bladder, which lies above the prostate, so the direction comes from the
+    labels rather than from an assumed axis order.
+
+    Returns:
+        (position per level, boolean per level: prostate present), or None if
+        the case has no prostate or no bladder.
+    """
+    prostate_voxels = (masks == prostate).sum((0, 1))
+    bladder_voxels = (masks == bladder).sum((0, 1))
+    present = prostate_voxels > 0
+    if not present.any() or not bladder_voxels.any():
+        return None
+    levels = np.arange(len(present))
+    first, last = levels[present].min(), levels[present].max()
+    position = (levels - first) / max(last - first, 1)
+    if np.average(levels, weights=bladder_voxels) < np.average(levels, weights=prostate_voxels):
+        position = 1 - position
+    return position, present
+
+
 def prostate_by_position(results, prostate, bladder):
     """
-    Prostate Dice along the gland, for the spec's apex and base failure mode.
-
-    The HipMRI slices are coronal, so the foot-head axis is the last axis of the
-    stacked case (N slices, rows, columns): each column index is one axial
-    level. The levels with prostate in the ground truth are placed from apex (0)
-    to base (1). The base is the end nearer the bladder, which lies above the
-    prostate, so the direction comes from the labels rather than from an assumed
-    axis order. Cases without any bladder are skipped.
+    Prostate Dice along the gland (see gland_position), for the spec's apex and
+    base failure mode. Cases without any bladder are skipped.
 
     Returns:
         (per-level rows [(position 0..1, level Dice, case name)],
@@ -210,19 +233,13 @@ def prostate_by_position(results, prostate, bladder):
     """
     rows, thirds = [], {name: np.zeros(2) for name in ("apex", "mid", "base")}
     for case_id, case in results.items():
-        truth, predicted = case["masks"] == prostate, case["preds"] == prostate
-        prostate_voxels = truth.sum((0, 1))
-        bladder_voxels = (case["masks"] == bladder).sum((0, 1))
-        present = prostate_voxels > 0
-        if not present.any() or not bladder_voxels.any():
+        located = gland_position(case["masks"], prostate, bladder)
+        if located is None:
             continue
-        levels = np.arange(len(present))
-        first, last = levels[present].min(), levels[present].max()
-        position = (levels - first) / max(last - first, 1)
-        if np.average(levels, weights=bladder_voxels) < np.average(levels, weights=prostate_voxels):
-            position = 1 - position
+        position, present = located
+        truth, predicted = case["masks"] == prostate, case["preds"] == prostate
         intersection = (truth & predicted).sum((0, 1))
-        total = prostate_voxels + predicted.sum((0, 1))
+        total = truth.sum((0, 1)) + predicted.sum((0, 1))
         for z in np.flatnonzero(present):
             rows.append((position[z], 2 * intersection[z] / total[z], case_name(case_id)))
             thirds[("apex", "mid", "base")[min(int(position[z] * 3), 2)]] += intersection[z], total[z]
@@ -444,36 +461,74 @@ def plot_position_2d_3d(rows_3d, thirds_3d, rows_2d, thirds_2d, target, path):
     plt.close(fig)
 
 
-def plot_worst_volumes(cases, results, slab_2d, images, names, path):
+def prostate_errors(grey, truth, predicted):
+    """RGB overlay of prostate false positives (red) and false negatives (blue) on a [0, 1] image."""
+    overlay = np.repeat(grey[..., None], 3, axis=-1)
+    overlay[predicted & ~truth] = (1, 0, 0)
+    overlay[truth & ~predicted] = (0, 0.4, 1)
+    return overlay
+
+
+def plot_worst_volumes(cases, results, slab_2d, images, names, path, crop=96):
     """
-    One row per volume: the axial slice through the prostate centre, showing the
-    image, ground truth, 3D prediction and (inside the slab only) 2D prediction.
+    Two rows per volume, at the apex and base failures: in the third of the gland
+    nearest each end (see gland_position), the axial level with the lowest 3D
+    prostate Dice. Each row shows the image, ground truth, 3D prediction and the
+    3D model's prostate false positives (red) and false negatives (blue), plus
+    the same overlay for the 2D model with --compare. Panels are cropped to
+    crop x crop voxels around the prostate so boundary errors are visible.
     """
     colours = ListedColormap(COLOURS[:len(names)])
-    columns_ = 4 if slab_2d else 3
-    fig, axes = plt.subplots(len(cases), columns_, figsize=(3.2 * columns_, 3.8 * len(cases)), squeeze=False)
-    prostate = names.index("Prostate")
-    for row, case in zip(axes, cases):
+    prostate, bladder = names.index("Prostate"), names.index("Bladder")
+    rows = []
+    for case in cases:
+        truth, predicted = results[case]["masks"] == prostate, results[case]["preds"] == prostate
+        dice = 2 * (truth & predicted).sum((0, 1)) / np.maximum(truth.sum((0, 1)) + predicted.sum((0, 1)), 1)
+        located = gland_position(results[case]["masks"], prostate, bladder)
+        if located is None:
+            rows.append((case, truth.shape[2] // 2, "centre"))
+            continue
+        position, present = located
+        # Same thirds as prostate_by_position.
+        for end, third in (("apex", position < 1 / 3), ("base", position >= 2 / 3)):
+            levels = np.flatnonzero(present & third)
+            if len(levels):
+                rows.append((case, int(levels[np.argmin(dice[levels])]), end))
+
+    columns_ = 5 if slab_2d else 4
+    fig, axes = plt.subplots(len(rows), columns_, figsize=(2.6 * columns_, 2.9 * len(rows)), squeeze=False)
+    for row, (case, z, end) in zip(axes, rows):
         mask, pred = results[case]["masks"], results[case]["preds"]
-        levels = np.flatnonzero((mask == prostate).any((0, 1)))
-        z = int(levels.mean()) if len(levels) else mask.shape[2] // 2
-        panels = [(images[case][:, :, z], "gray", None, f"{case_name(case)}, axial level {z}"),
-                  (mask[:, :, z], colours, len(names) - 1, "Ground truth"),
-                  (pred[:, :, z], colours, len(names) - 1, "3D prediction")]
+        # Crop window centred on the prostate in plane, kept inside the volume.
+        centre = np.argwhere((mask == prostate).any(2)).mean(0).astype(int) if (mask == prostate).any() \
+            else np.array(mask.shape[:2]) // 2
+        x0, y0 = (int(np.clip(c - crop // 2, 0, size - crop)) for c, size in zip(centre, mask.shape[:2]))
+        window = (slice(x0, x0 + crop), slice(y0, y0 + crop), z)
+        image = images[case][window].astype(np.float64)
+        grey = (image - image.min()) / (image.max() - image.min() + 1e-8)
+        truth, predicted = mask[window] == prostate, pred[window] == prostate
+        level_dice = 2 * (truth & predicted).sum() / max(truth.sum() + predicted.sum(), 1)
+        panels = [(grey, "gray", 1, f"{case_name(case)}, {end}, axial level {z}"),
+                  (mask[window], colours, len(names) - 1, "Ground truth"),
+                  (pred[window], colours, len(names) - 1, "3D prediction"),
+                  (prostate_errors(grey, truth, predicted), None, 1, f"3D prostate Dice {level_dice:.2f}: FP red, FN blue")]
         if slab_2d:
-            # Outside the slab the 2D model never predicted anything; show it as background.
+            # Outside the slab the 2D model never predicted anything; count it as background.
             band = np.zeros_like(mask[:, :, z])
             band[:, SLAB] = slab_2d[case]["preds"][:, :, z]
-            panels.append((band, colours, len(names) - 1, "2D prediction (coronal slab only)"))
+            predicted_2d = band[window[:2]] == prostate
+            dice_2d = 2 * (truth & predicted_2d).sum() / max(truth.sum() + predicted_2d.sum(), 1)
+            panels.append((prostate_errors(grey, truth, predicted_2d), None, 1, f"2D prostate Dice {dice_2d:.2f}: FP red, FN blue"))
         for ax, (values, cmap, vmax, title) in zip(row, panels):
             # Radiological view: front of the body at the top, patient's right on the left.
-            ax.imshow(values.T, cmap=cmap, vmin=0 if vmax else None, vmax=vmax, interpolation="nearest")
+            ax.imshow(values.transpose(1, 0, *range(2, values.ndim)), cmap=cmap, vmin=0, vmax=vmax,
+                      interpolation="nearest")
             ax.set_title(title, fontsize=8)
             ax.axis("off")
     handles = [plt.Rectangle((0, 0), 1, 1, color=colours(i)) for i in range(len(names))]
     fig.legend(handles, names, loc="lower center", ncol=len(names), fontsize=8)
-    fig.suptitle("Test volumes with the lowest full-resolution prostate Dice", fontsize=10)
-    fig.tight_layout(rect=(0, 0.04, 1, 0.97))
+    fig.suptitle("Test volumes with the lowest full-resolution prostate Dice: worst apex and base levels", fontsize=10)
+    fig.tight_layout(rect=(0, 0.02, 1, 0.98))
     fig.savefig(path, dpi=110)
     plt.close(fig)
 
