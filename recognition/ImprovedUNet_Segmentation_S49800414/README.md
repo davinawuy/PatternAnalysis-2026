@@ -509,7 +509,7 @@ Each patient contributes 32 slices, numbered 0–31. All five of the Improved U-
 
 ### Interpretation
 
-**HipMRI 3D.** Patient 40 week 4 is the worst test volume in 9 of the 12 HipMRI runs, across 2D and 3D, both models and all seeds, which indicates a property of the scan rather than of any model. The cause of its difficulty was not investigated.
+**HipMRI 3D.** Patient 40 week 4 is the worst test volume in 9 of the 12 HipMRI runs, across 2D and 3D, both models and all seeds, which indicates a property of the scan rather than of any model. The cause was not isolated within the scope of this work; comparing the scan's gland size, contrast and contour against the same patient's other six test scans would identify it.
 
 Within the gland, 3D context improves the mid-gland and keeps the prostate in one piece, but it does not resolve the apex, where some levels score below 0.5 in 2D and 3D alike. At the worst apex levels the 3D models mostly over-contour, and in one volume they miss the tip altogether. The gland tapers to a point at the apex, and after downsampling by a factor of two a voxel measures about 2.8–3.6 mm in plane and 3.1 mm between slices, so the tip spans only a few low-resolution voxels. Upsampling this coarse prediction is a plausible cause of the over-contoured ring, although this hypothesis was not tested.
 
